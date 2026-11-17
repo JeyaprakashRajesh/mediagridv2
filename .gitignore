@@ -1,0 +1,8 @@
+ios/*.xcodeproj/
+ios/build/
+ios/Payload/
+*.ipa
+windows/node_modules/
+windows/src-tauri/target/
+windows/src-tauri/gen/
+.DS_Store
