@@ -20,10 +20,14 @@ actor ImageCache {
 
     nonisolated static func key(_ url: URL) -> String {
         // strip the auth token so cache survives re-login
-        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        c?.queryItems = c?.queryItems?.filter { $0.name != "t" }
-        c?.host = nil; c?.port = nil
-        let s = c?.string ?? url.absoluteString
+        var s = url.absoluteString
+        if var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            let items = (c.queryItems ?? []).filter { $0.name != "t" }
+            c.queryItems = items.isEmpty ? nil : items
+            c.host = nil
+            c.port = nil
+            s = c.string ?? s
+        }
         return SHA256.hash(data: Data(s.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 
