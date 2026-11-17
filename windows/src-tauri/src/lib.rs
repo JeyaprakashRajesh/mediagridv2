@@ -54,6 +54,8 @@ fn get_info(app: State<Shared>) -> Value {
         "videos": l.media.iter().filter(|m| m.kind == "video").count(),
         "scanning": l.scanning,
         "syncedPhotos": app.synced.lock().len(),
+        "serverError": app.server_error.lock().clone(),
+        "version": env!("CARGO_PKG_VERSION"),
     })
 }
 
@@ -84,6 +86,7 @@ fn save_settings(app: State<Shared>, handle: tauri::AppHandle, s: Value) -> Resu
     let _ = if autostart { al.enable() } else { al.disable() };
     if dirs_changed {
         app.rescan();
+        app.watch_folders();
     }
     app.push(json!({ "event": "settings" }));
     Ok(())
@@ -110,6 +113,27 @@ fn revoke_device(app: State<Shared>, prefix: String) {
     drop(c);
     app.devices.write().retain(|t, _| !t.starts_with(&prefix));
     app.ui("devices", json!({}));
+}
+
+/// Adds an inbound Windows Firewall rule for MediaGrid (shows a UAC prompt).
+#[tauri::command]
+fn allow_firewall() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe = exe.to_string_lossy().replace('\'', "''");
+        let args = format!(
+            "advfirewall firewall add rule name=MediaGrid dir=in action=allow program=\"{exe}\" enable=yes profile=any"
+        );
+        let ps = format!("Start-Process netsh -Verb RunAs -WindowStyle Hidden -ArgumentList '{}'", args.replace('\'', "''"));
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps])
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -151,12 +175,25 @@ pub fn run() {
     let shared = App::new();
     let minimized = std::env::args().any(|a| a == "--minimized");
 
+    // Server-only mode (no window/tray): `MediaGrid.exe --headless` or MEDIAGRID_HEADLESS=1.
+    if std::env::args().any(|a| a == "--headless") || std::env::var_os("MEDIAGRID_HEADLESS").is_some() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async move {
+            shared.rescan();
+            shared.watch_folders();
+            clip::watch(shared.clone());
+            server::run(shared).await;
+        });
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder])
+        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder, allow_firewall])
         .setup(move |app| {
             let _ = shared.handle.set(app.handle().clone());
 
@@ -193,6 +230,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move { server::run(s3).await });
             clip::watch(shared.clone());
             shared.rescan();
+            shared.watch_folders();
 
             if !minimized {
                 show_main(app.handle());

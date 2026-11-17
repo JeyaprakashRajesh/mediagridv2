@@ -4,6 +4,7 @@ use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast;
@@ -43,6 +44,11 @@ pub struct App {
     pub synced: Mutex<HashSet<String>>,
     pub ui_token: String,
     pub handle: OnceCell<AppHandle>,
+    pub server_error: Mutex<Option<String>>,
+    rescan_pending: AtomicBool,
+    photo_batch: AtomicU32,
+    photo_gen: AtomicU32,
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 pub type Shared = Arc<App>;
@@ -70,6 +76,11 @@ impl App {
             synced: Mutex::new(config::load_synced()),
             ui_token: config::random_hex(16),
             handle: OnceCell::new(),
+            server_error: Mutex::new(None),
+            rescan_pending: AtomicBool::new(false),
+            photo_batch: AtomicU32::new(0),
+            photo_gen: AtomicU32::new(0),
+            watcher: Mutex::new(None),
         })
     }
 
@@ -78,6 +89,30 @@ impl App {
         if let Some(h) = self.handle.get() {
             let _ = h.emit("mg", serde_json::json!({ "event": event, "data": payload }));
         }
+    }
+
+    /// Windows toast notification.
+    pub fn notify(&self, title: &str, body: &str) {
+        if let Some(h) = self.handle.get() {
+            use tauri_plugin_notification::NotificationExt;
+            let _ = h.notification().builder().title(title).body(body).show();
+        }
+    }
+
+    /// One toast per burst of photos ("12 photos backed up") instead of one per photo.
+    pub fn photo_received(self: &Shared) {
+        self.photo_batch.fetch_add(1, Ordering::SeqCst);
+        let gen = self.photo_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let me = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if me.photo_gen.load(Ordering::SeqCst) == gen {
+                let n = me.photo_batch.swap(0, Ordering::SeqCst);
+                if n > 0 {
+                    me.notify("Photos backed up", &format!("{n} new photo{} from your iPhone", if n == 1 { "" } else { "s" }));
+                }
+            }
+        });
     }
 
     /// Push an event to every connected phone.
@@ -100,6 +135,8 @@ impl App {
 
     pub fn rescan(self: &Shared) {
         if self.lib.read().scanning {
+            // a scan is running: run one more when it finishes
+            self.rescan_pending.store(true, Ordering::SeqCst);
             return;
         }
         self.lib.write().scanning = true;
@@ -115,6 +152,46 @@ impl App {
             *me.lib.write() = lib;
             me.ui("scan", serde_json::json!({ "scanning": false, "tracks": nt, "media": nm }));
             me.push(serde_json::json!({ "event": "library", "tracks": nt, "media": nm }));
+            if me.rescan_pending.swap(false, Ordering::SeqCst) {
+                me.rescan();
+            }
+        });
+    }
+
+    /// Watch the music & media folders and rescan (debounced) when files change.
+    pub fn watch_folders(self: &Shared) {
+        use notify::{RecursiveMode, Watcher};
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(e) = res {
+                if e.kind.is_create() || e.kind.is_remove() || e.kind.is_modify() {
+                    let interesting = e.paths.iter().any(|p| {
+                        let ext = p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+                        !ext.is_empty() && ext != "mgpart" && ext != "tmp" && ext != "crdownload"
+                    });
+                    if interesting { let _ = tx.send(()); }
+                }
+            }
+        });
+        let Ok(mut w) = watcher else { return };
+        let dirs = {
+            let c = self.cfg.read();
+            let mut d = c.music_dirs.clone();
+            d.extend(c.media_dirs.clone());
+            d.push(c.photo_sync_dir.clone());
+            d
+        };
+        for d in dirs {
+            let _ = w.watch(std::path::Path::new(&d), RecursiveMode::Recursive);
+        }
+        *self.watcher.lock() = Some(w);
+        let me = self.clone();
+        std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                // debounce: wait until changes settle for 4s
+                while rx.recv_timeout(std::time::Duration::from_secs(4)).is_ok() {}
+                me.rescan();
+            }
         });
     }
 }

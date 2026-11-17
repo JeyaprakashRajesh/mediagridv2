@@ -233,9 +233,14 @@ const io = new IntersectionObserver((ents) => ents.forEach((e) => {
     img.onerror = () => { el.innerHTML += `<div class="empty" style="padding:30px 6px;font-size:11px">${esc(m.name)}</div>`; };
     img.src = url(`/api/media/thumb/${m.id}?s=360`); el.prepend(img);
   } else {
-    const v = document.createElement("video"); v.muted = true; v.preload = "metadata";
-    v.onloadeddata = () => v.classList.add("loaded");
-    v.src = url(`/api/media/file/${m.id}`) + "#t=1"; el.prepend(v);
+    const img = new Image(); img.onload = () => img.classList.add("loaded");
+    img.onerror = () => {
+      img.remove();
+      const v = document.createElement("video"); v.muted = true; v.preload = "metadata";
+      v.onloadeddata = () => v.classList.add("loaded");
+      v.src = url(`/api/media/file/${m.id}`) + "#t=1"; el.prepend(v);
+    };
+    img.src = url(`/api/media/thumb/${m.id}?s=360`); el.prepend(img);
   }
 }), { rootMargin: "400px" });
 function renderMedia() {
@@ -310,6 +315,10 @@ $("#acct-save").onclick = async () => {
     refreshInfo();
   } catch (e) { m.className = "msg err"; m.textContent = e; }
 };
+$("#fw-allow").onclick = async () => {
+  try { await invoke("allow_firewall"); toast("Approve the Windows prompt to allow MediaGrid through the firewall"); }
+  catch (e) { toast("Couldn't open the firewall prompt: " + e); }
+};
 $("#pc-name-save").onclick = async () => { await invoke("save_settings", { s: { name: $("#pc-name").value } }); toast("Renamed — restart MediaGrid to update Wi-Fi discovery"); refreshInfo(); };
 
 /* ---------------- settings ---------------- */
@@ -344,8 +353,10 @@ async function refreshInfo() {
   info = await invoke("get_info");
   BASE = `http://127.0.0.1:${info.port}`; TOKEN = info.uiToken;
   const pill = $("#status-pill");
-  pill.textContent = info.scanning ? "Scanning library…" : `Running · port ${info.port}`;
-  pill.classList.toggle("ok", !info.scanning);
+  pill.textContent = info.serverError ? "Not reachable — port in use" : info.scanning ? "Scanning library…" : `Running · port ${info.port}`;
+  pill.classList.toggle("ok", !info.scanning && !info.serverError);
+  pill.classList.toggle("bad", !!info.serverError);
+  pill.title = info.serverError || "";
   renderProfile(); renderSettings();
 }
 
@@ -354,7 +365,10 @@ T.event.listen("mg", ({ payload }) => {
   if (event === "scan") { refreshInfo(); if (!data.scanning) { loadTracks(); media = []; if ($("#tab-media").classList.contains("active")) loadMedia(); } }
   else if (event === "shared") { const el = $("#shared-list"); if ($(".empty", el)) el.innerHTML = ""; el.insertAdjacentHTML("afterbegin", renderShared(data)); bindShared(el, [data]); if (data.from !== "pc") toast(data.kind === "file" ? `Received ${data.name}` : "Clipboard from iPhone"); }
   else if (event === "devices") { if ($("#tab-mobile").classList.contains("active")) loadDevices(); }
-  else if (event === "photo") { info.syncedPhotos++; }
+  else if (event === "photo") {
+    info.syncedPhotos++;
+    if (data.item && media.length) { media.unshift(data.item); if ($("#tab-media").classList.contains("active")) renderMedia(); }
+  }
   else if (event === "error") toast(data.message);
 });
 

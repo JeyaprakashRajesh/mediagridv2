@@ -1,6 +1,6 @@
 use crate::config::{cache_dir, id_for};
 use lofty::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -10,10 +10,10 @@ const AUDIO: &[&str] = &["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aif
 const PHOTO: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "bmp", "tif", "tiff", "dng"];
 const VIDEO: &[&str] = &["mp4", "mov", "m4v", "mkv", "avi", "webm", "3gp", "wmv"];
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
-    #[serde(skip)]
+    #[serde(skip_serializing, default)]
     pub path: String,
     pub title: String,
     pub artist: String,
@@ -61,7 +61,7 @@ fn mtime(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-fn read_track(path: &Path, meta: &std::fs::Metadata) -> Track {
+fn read_track(path: &Path, meta: &std::fs::Metadata, root: &Path) -> Track {
     let ps = path.to_string_lossy().to_string();
     let id = id_for(&ps);
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -79,6 +79,12 @@ fn read_track(path: &Path, meta: &std::fs::Metadata) -> Track {
         year: 0,
         has_art: false,
     };
+    // folder name as album when the file has no tag
+    if let Some(parent) = path.parent() {
+        if parent != root {
+            if let Some(n) = parent.file_name() { t.album = n.to_string_lossy().to_string(); }
+        }
+    }
     // "Artist - Title.mp3" fallback
     if let Some((a, b)) = stem.split_once(" - ") {
         t.artist = a.trim().into();
@@ -107,13 +113,26 @@ fn read_track(path: &Path, meta: &std::fs::Metadata) -> Track {
 impl Library {
     pub fn scan(music_dirs: &[String], media_dirs: &[String], iphone_dir: &str) -> Library {
         let mut lib = Library::default();
+        // tag cache: re-reading tags is the slow part of a scan, so reuse
+        // entries whose size and modified time haven't changed.
+        let cache_file = cache_dir().join("tags.json");
+        let cache: HashMap<String, Track> = std::fs::read_to_string(&cache_file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<Track>>(&s).ok())
+            .map(|v| v.into_iter().map(|t| (t.path.clone(), t)).collect())
+            .unwrap_or_default();
         for d in music_dirs {
+            let root = Path::new(d);
             for e in WalkDir::new(d).follow_links(true).into_iter().filter_map(|e| e.ok()) {
                 if !e.file_type().is_file() { continue; }
                 let p = e.path();
                 if !AUDIO.contains(&ext_of(p).as_str()) { continue; }
                 let Ok(meta) = e.metadata() else { continue };
-                let t = read_track(p, &meta);
+                let ps = p.to_string_lossy().to_string();
+                let t = match cache.get(&ps) {
+                    Some(c) if c.size == meta.len() && c.added == mtime(&meta) => c.clone(),
+                    _ => read_track(p, &meta, root),
+                };
                 if lib.track_map.contains_key(&t.id) { continue; }
                 lib.track_map.insert(t.id.clone(), lib.tracks.len());
                 lib.tracks.push(t);
@@ -121,6 +140,10 @@ impl Library {
         }
         lib.tracks.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         lib.track_map = lib.tracks.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
+        #[derive(Serialize)]
+        struct Cached<'a> { #[serde(flatten)] t: &'a Track, path: &'a str }
+        let cached: Vec<Cached> = lib.tracks.iter().map(|t| Cached { t, path: &t.path }).collect();
+        if let Ok(j) = serde_json::to_string(&cached) { let _ = std::fs::write(&cache_file, j); }
 
         let iphone_lc = iphone_dir.to_lowercase();
         let mut dirs: Vec<String> = media_dirs.to_vec();
@@ -156,6 +179,30 @@ impl Library {
         lib
     }
 
+    /// Add one new file (e.g. a photo just received from the iPhone) without a full rescan.
+    pub fn add_media(&mut self, path: &Path, from_iphone: bool) -> Option<MediaItem> {
+        let ext = ext_of(path);
+        let kind = if PHOTO.contains(&ext.as_str()) { "photo" } else if VIDEO.contains(&ext.as_str()) { "video" } else { return None };
+        let meta = std::fs::metadata(path).ok()?;
+        let ps = path.to_string_lossy().to_string();
+        let id = id_for(&ps);
+        if self.media_map.contains_key(&id) { return None; }
+        let item = MediaItem {
+            id: id.clone(),
+            name: path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            folder: path.parent().and_then(|x| x.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            from_iphone,
+            path: ps,
+            kind,
+            size: meta.len(),
+            modified: mtime(&meta),
+        };
+        let pos = self.media.iter().position(|m| m.modified < item.modified).unwrap_or(self.media.len());
+        self.media.insert(pos, item.clone());
+        self.media_map = self.media.iter().enumerate().map(|(i, m)| (m.id.clone(), i)).collect();
+        Some(item)
+    }
+
     pub fn track(&self, id: &str) -> Option<&Track> {
         self.track_map.get(id).map(|&i| &self.tracks[i])
     }
@@ -170,11 +217,69 @@ pub fn thumbnail(id: &str, path: &str, size: u32) -> Option<Vec<u8>> {
     if let Ok(b) = std::fs::read(&out) {
         return Some(b);
     }
-    let img = image::open(path).ok()?;
-    let t = img.thumbnail(size, size);
+    let rgb = match image::open(path) {
+        Ok(img) => img.thumbnail(size, size).to_rgb8(),
+        Err(_) => shell_thumbnail(path, size)?,
+    };
     let mut buf = std::io::Cursor::new(Vec::new());
-    t.to_rgb8().write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
+    rgb.write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
     let v = buf.into_inner();
     let _ = std::fs::write(&out, &v);
     Some(v)
+}
+
+/// Windows Explorer's own thumbnailer: handles HEIC (iPhone photos), RAW and videos.
+#[cfg(windows)]
+fn shell_thumbnail(path: &str, size: u32) -> Option<image::RgbImage> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_RESIZETOFIT};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None).ok()?;
+        let hbm = factory
+            .GetImage(SIZE { cx: size as i32, cy: size as i32 }, SIIGBF_RESIZETOFIT | SIIGBF_BIGGERSIZEOK)
+            .ok()?;
+        let mut bm = BITMAP::default();
+        GetObjectW(hbm.into(), std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut BITMAP as *mut _));
+        let (w, h) = (bm.bmWidth, bm.bmHeight.abs());
+        if w <= 0 || h <= 0 {
+            let _ = DeleteObject(hbm.into());
+            return None;
+        }
+        let mut bmi = BITMAPINFO::default();
+        bmi.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h, // top-down rows
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        };
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let dc = CreateCompatibleDC(None);
+        let rows = GetDIBits(dc, hbm, 0, h as u32, Some(buf.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS);
+        let _ = DeleteDC(dc);
+        let _ = DeleteObject(hbm.into());
+        if rows == 0 {
+            return None;
+        }
+        let mut rgb = image::RgbImage::new(w as u32, h as u32);
+        for (i, px) in rgb.pixels_mut().enumerate() {
+            let b = &buf[i * 4..i * 4 + 4];
+            *px = image::Rgb([b[2], b[1], b[0]]);
+        }
+        Some(rgb)
+    }
+}
+
+#[cfg(not(windows))]
+fn shell_thumbnail(_path: &str, _size: u32) -> Option<image::RgbImage> {
+    None
 }

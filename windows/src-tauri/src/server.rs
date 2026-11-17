@@ -80,7 +80,11 @@ pub async fn run(app: Shared) {
         Ok(l) => {
             let _ = axum::serve(l, router.into_make_service_with_connect_info::<SocketAddr>()).await;
         }
-        Err(e) => app.ui("error", json!({ "message": format!("Port {port} is busy: {e}") })),
+        Err(e) => {
+            let msg = format!("Port {port} is already in use ({e}). Close the other app using it or change the port.");
+            *app.server_error.lock() = Some(msg.clone());
+            app.ui("error", json!({ "message": msg }));
+        }
     }
 }
 
@@ -134,19 +138,36 @@ struct Login {
 }
 
 async fn login(State(app): State<Shared>, Json(b): Json<Login>) -> Response {
-    let mut c = app.cfg.write();
-    if !c.has_account() {
+    let (has, ok) = {
+        let c = app.cfg.read();
+        (c.has_account(), c.check(&b.email, &b.password))
+    };
+    if !has {
         return err(StatusCode::CONFLICT, "Create your account in the MediaGrid app on your PC first (Profile tab).");
     }
-    if !c.check(&b.email, &b.password) {
+    if !ok {
+        // slow down password guessing
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         return err(StatusCode::UNAUTHORIZED, "Wrong email or password.");
     }
+    login_ok(&app, b.device)
+}
+
+fn login_ok(app: &Shared, device: String) -> Response {
+    let mut c = app.cfg.write();
     let token = random_hex(24);
-    let dev = if b.device.is_empty() { "iPhone".into() } else { b.device };
+    let dev = if device.is_empty() { "iPhone".into() } else { device };
+    // signing in again from the same phone replaces its old pairing
+    let stale: Vec<String> = c.tokens.iter().filter(|(_, n)| **n == dev).map(|(t, _)| t.clone()).collect();
+    for t in &stale { c.tokens.remove(t); }
     c.tokens.insert(token.clone(), dev.clone());
     c.save();
     let name = c.device_name.clone();
     drop(c);
+    {
+        let mut d = app.devices.write();
+        d.retain(|t, _| !stale.contains(t));
+    }
     app.ui("devices", json!({}));
     Json(json!({ "token": token, "name": name })).into_response()
 }
@@ -165,9 +186,36 @@ async fn tracks(State(app): State<Shared>) -> Json<Value> {
     Json(json!(app.lib.read().tracks))
 }
 
+/// MIME types iOS's AVPlayer recognises (mime_guess gives e.g. "audio/m4a", which it rejects).
+fn media_mime(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    Some(match ext.as_str() {
+        "mp3" => "audio/mpeg",
+        "m4a" | "alac" | "m4b" => "audio/mp4",
+        "aac" => "audio/aac",
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "aif" | "aiff" => "audio/aiff",
+        "ogg" | "opus" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "m4v" => "video/x-m4v",
+        "mov" => "video/quicktime",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        _ => return None,
+    })
+}
+
 async fn serve_path(path: PathBuf, req: Request) -> Response {
+    let mime = media_mime(&path);
     match ServeFile::new(path).oneshot(req).await {
-        Ok(r) => r.map(Body::new).into_response(),
+        Ok(r) => {
+            let mut r = r.map(Body::new).into_response();
+            if let Some(m) = mime {
+                r.headers_mut().insert(header::CONTENT_TYPE, header::HeaderValue::from_static(m));
+            }
+            r
+        }
         Err(_) => err(StatusCode::NOT_FOUND, "not found"),
     }
 }
@@ -214,10 +262,7 @@ async fn media_file(State(app): State<Shared>, AxPath(id): AxPath<String>, req: 
 async fn media_thumb(State(app): State<Shared>, AxPath(id): AxPath<String>, Query(q): Q) -> Response {
     let item = app.lib.read().item(&id).map(|m| (m.path.clone(), m.kind));
     let size: u32 = q.get("s").and_then(|s| s.parse().ok()).unwrap_or(360).clamp(64, 1600);
-    let Some((path, kind)) = item else { return err(StatusCode::NOT_FOUND, "no such item") };
-    if kind != "photo" {
-        return err(StatusCode::NOT_FOUND, "video");
-    }
+    let Some((path, _kind)) = item else { return err(StatusCode::NOT_FOUND, "no such item") };
     thumb_response(id, path, size).await
 }
 
@@ -393,6 +438,13 @@ async fn shared_list(State(app): State<Shared>) -> Json<Value> {
 
 async fn shared_text(State(app): State<Shared>, axum::Extension(w): axum::Extension<Who>, Json(b): Json<TextBody>) -> Json<Value> {
     let from = who_name(&app, &w);
+    if from != "pc" && !b.text.is_empty() {
+        // text sent from the phone is ready to paste on the PC
+        *app.last_clip.lock() = b.text.clone();
+        crate::clip::set_text(&b.text);
+        let preview: String = b.text.chars().take(120).collect();
+        app.notify(&format!("Text from {from} — copied"), &preview);
+    }
     app.add_shared(SharedItem { id: random_hex(8), kind: "text".into(), text: Some(b.text), name: None, size: None, path: None, from, at: now_ms() });
     Json(json!({ "ok": true }))
 }
@@ -410,6 +462,9 @@ async fn shared_file_up(State(app): State<Shared>, axum::Extension(w): axum::Ext
                 path: Some(p.to_string_lossy().to_string()), from, at: now_ms(),
             };
             app.add_shared(item.clone());
+            if item.from != "pc" {
+                app.notify(&format!("File from {}", item.from), item.name.as_deref().unwrap_or("file"));
+            }
             Json(json!(item)).into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
@@ -451,7 +506,14 @@ async fn photos_upload(State(app): State<Shared>, Query(q): Q, body: Body) -> Re
                 s.insert(asset);
                 config::save_synced(&s);
             }
-            app.ui("photo", json!({ "name": name }));
+            // file date = when the photo was taken, so it sorts correctly everywhere
+            if let Ok(f) = std::fs::File::options().write(true).open(&p) {
+                let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(created.max(0) as u64);
+                let _ = f.set_modified(t);
+            }
+            let added = app.lib.write().add_media(&p, true);
+            app.photo_received();
+            app.ui("photo", json!({ "name": name, "item": added }));
             Json(json!({ "ok": true })).into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
