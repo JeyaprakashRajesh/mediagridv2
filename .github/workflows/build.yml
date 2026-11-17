@@ -43,7 +43,8 @@ jobs:
       - name: Show errors
         if: failure()
         working-directory: ios
-        run: grep -E " error: " build.log | sort -u | head -80 || true
+        run: |
+          grep -E " error: " build.log | sort -u | head -80 || true
       - name: Package IPA
         working-directory: ios
         run: |
