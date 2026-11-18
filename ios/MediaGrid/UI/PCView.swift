@@ -166,7 +166,7 @@ struct RemoteControlView: View {
 
     private func mediaBtn(_ icon: String, _ action: String) -> some View {
         Button { send(["type": "media", "action": action]) } label: { Image(systemName: icon).font(.title3).frame(width: 40, height: 40) }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
+            .buttonStyle(.glass).buttonBorderShape(.circle).tint(Theme.accent)
     }
 
     private func powerBtn(_ t: String, _ icon: String, _ action: String, safe: Bool = false) -> some View {
@@ -180,7 +180,7 @@ struct RemoteControlView: View {
             .frame(maxWidth: .infinity).padding(.vertical, 10)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(action == "shutdown" ? Theme.pink : .primary)
+        .foregroundStyle(action == "shutdown" ? Theme.pink : action == "restart" ? Color.orange : action == "lock" ? Theme.cyan : Theme.mint)
     }
 }
 

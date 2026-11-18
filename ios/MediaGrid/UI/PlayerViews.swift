@@ -148,7 +148,7 @@ struct NowPlayingView: View {
                         .font(.system(size: 32)).frame(width: 74, height: 74)
                         .contentTransition(.symbolEffect(.replace))
                 }
-                .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white.opacity(0.9)).foregroundStyle(.black)
+                .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.accentColor).foregroundStyle(.white)
                 Spacer()
                 Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 28)) }
                 Spacer()

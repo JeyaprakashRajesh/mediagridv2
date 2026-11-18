@@ -274,7 +274,7 @@ struct MusicView: View {
                     ForEach(music.playlists) { p in
                         let ts = music.tracks(for: p)
                         NavigationLink(value: SongCollection(id: "pl-\(p.id)", title: p.name, subtitle: "\(ts.count) songs",
-                                                             colors: [Theme.accent], tracks: ts, artTrack: ts.first, playlist: p)) {
+                                                             colors: [Theme.pick(p.name)], tracks: ts, artTrack: ts.first, playlist: p)) {
                             VStack(alignment: .leading, spacing: 8) {
                                 ZStack {
                                     if ts.isEmpty {
@@ -318,7 +318,7 @@ struct MusicView: View {
                 LazyHStack(spacing: 14) {
                     ForEach(music.albums.prefix(30)) { a in
                         NavigationLink(value: SongCollection(id: "al-\(a.name)", title: a.name, subtitle: a.artist,
-                                                             colors: [Theme.accent], tracks: a.tracks, artTrack: a.tracks.first)) {
+                                                             colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first)) {
                             VStack(alignment: .leading, spacing: 6) {
                                 ArtworkView(track: a.tracks.first, size: 140, radius: 16).cardShadow()
                                 Text(a.name).font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -341,7 +341,7 @@ struct MusicView: View {
                 LazyHStack(spacing: 16) {
                     ForEach(music.artists.prefix(30)) { a in
                         NavigationLink(value: SongCollection(id: "ar-\(a.name)", title: a.name, subtitle: "\(a.tracks.count) songs",
-                                                             colors: [Theme.cyan, Theme.violet], tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))) {
+                                                             colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))) {
                             VStack(spacing: 8) {
                                 ArtworkView(track: a.tracks.first(where: { $0.has_art }) ?? a.tracks.first, size: 104, radius: 52).cardShadow()
                                 Text(a.name).font(.footnote.weight(.semibold)).lineLimit(1)
@@ -604,23 +604,23 @@ struct TrackRow: View {
 extension MusicStore {
     /// Rebuild a playlist / mix / album page from its id (used by "Go to playlist").
     func collection(id: String) -> SongCollection? {
-        let grey = [Color(hex: 0x38383D)]
+        let grey = [Color(hex: 0x4F46E5)]
         if id == "all" {
             return SongCollection(id: "all", title: "All Songs", subtitle: "\(tracks.count) songs", symbol: "music.note.list", colors: grey, tracks: tracks)
         }
         if id == "offline" {
             let ts = tracks.filter { downloaded.contains($0.id) }
-            return SongCollection(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill", colors: [Color(hex: 0x57575E)], tracks: ts)
+            return SongCollection(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill", colors: [Color(hex: 0x16A34A)], tracks: ts)
         }
         if id.hasPrefix("pl-"), let p = playlists.first(where: { "pl-\($0.id)" == id }) {
             let ts = tracks(for: p)
-            return SongCollection(id: id, title: p.name, subtitle: "\(ts.count) songs", colors: grey, tracks: ts, artTrack: ts.first, playlist: p)
+            return SongCollection(id: id, title: p.name, subtitle: "\(ts.count) songs", colors: [Theme.pick(p.name)], tracks: ts, artTrack: ts.first, playlist: p)
         }
         if id.hasPrefix("al-"), let a = albums.first(where: { "al-\($0.name)" == id }) {
-            return SongCollection(id: id, title: a.name, subtitle: a.artist, colors: grey, tracks: a.tracks, artTrack: a.tracks.first)
+            return SongCollection(id: id, title: a.name, subtitle: a.artist, colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first)
         }
         if id.hasPrefix("ar-"), let a = artists.first(where: { "ar-\($0.name)" == id }) {
-            return SongCollection(id: id, title: a.name, subtitle: "\(a.tracks.count) songs", colors: grey, tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))
+            return SongCollection(id: id, title: a.name, subtitle: "\(a.tracks.count) songs", colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))
         }
         return mixes.first(where: { $0.id == id }).map { SongCollection(mix: $0) }
     }

@@ -7,7 +7,9 @@ struct RootView: View {
     @EnvironmentObject var coord: Coordinator
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var media: MediaStore
+    @EnvironmentObject var player: Player
     @ObservedObject private var ui = UIState.shared
+    @ObservedObject private var tint = TintStore.shared
 
     var body: some View {
         ZStack {
@@ -38,24 +40,28 @@ struct RootView: View {
     private var tabs: some View {
         // Icons only: every tab is recognisable from its symbol (names stay for VoiceOver).
         TabView(selection: $ui.tab) {
-            Tab(value: AppTab.music) { MusicView() } label: { Image(systemName: "music.note.house").accessibilityLabel("Music") }
-            Tab(value: AppTab.media) { MediaView() } label: { Image(systemName: "photo.stack").accessibilityLabel("Media") }
-            Tab(value: AppTab.shared) { SharedView() } label: { Image(systemName: "doc.on.clipboard").accessibilityLabel("Shared") }
-            Tab(value: AppTab.pc) { PCView() } label: { Image(systemName: "desktopcomputer").accessibilityLabel("PC") }
-            Tab(value: AppTab.profile) { ProfileView() } label: { Image(systemName: "person.crop.circle").accessibilityLabel("Profile") }
+            Tab(value: AppTab.music) { MusicView().tint(tint.color) } label: { Image("TabMusic").accessibilityLabel("Music") }
+            Tab(value: AppTab.media) { MediaView().tint(tint.color) } label: { Image("TabMedia").accessibilityLabel("Media") }
+            Tab(value: AppTab.shared) { SharedView().tint(tint.color) } label: { Image("TabShared").accessibilityLabel("Shared") }
+            Tab(value: AppTab.pc) { PCView().tint(tint.color) } label: { Image("TabPC").accessibilityLabel("PC") }
+            Tab(value: AppTab.profile) { ProfileView().tint(tint.color) } label: { Image("TabProfile").accessibilityLabel("Profile") }
         }
+        .tint(Color(UIColor { $0.userInterfaceStyle == .dark ? .white : .black }))   // active tab: white (black in light), others grey
+        .environment(\.symbolVariants, .none)   // outline icons only, never filled
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory {
-            MiniPlayer { ui.openPlayer() }
+            MiniPlayer { ui.openPlayer() }.tint(tint.color)
         }
         // Full-screen page that pushes in like a navigation stack (not a drawer sheet).
         .overlay {
             if ui.showPlayer {
                 NowPlayingView { ui.closePlayer() }
+                    .tint(tint.color)
                     .transition(.move(edge: .trailing))
                     .zIndex(1)
             }
         }
+        .task(id: player.current?.id) { await tint.update(for: player.current) }
         .task {
             await music.refresh()
             await media.refresh()

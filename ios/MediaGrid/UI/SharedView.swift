@@ -90,9 +90,9 @@ struct SharedView: View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 30, matching: .any(of: [.images, .videos])) {
-                    actionLabel("Photos", "photo.on.rectangle", Theme.accent)
+                    actionLabel("Photos", "photo.on.rectangle", Theme.pink)
                 }
-                Button { importing = true } label: { actionLabel("Files", "folder.fill", Theme.accent) }
+                Button { importing = true } label: { actionLabel("Files", "folder.fill", Theme.cyan) }
             }
         }
         .buttonStyle(.plain)
@@ -103,7 +103,7 @@ struct SharedView: View {
 
     private func actionLabel(_ t: String, _ icon: String, _ c: Color) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: icon).font(.title2).foregroundStyle(c)
+            IconBadge(symbol: icon, color: c, size: 40)
             Text("Send \(t)").font(.footnote.weight(.semibold))
         }
         .frame(maxWidth: .infinity).padding(.vertical, 18)

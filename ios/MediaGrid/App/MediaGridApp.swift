@@ -34,7 +34,7 @@ struct MediaGridApp: App {
                 .environmentObject(coord)
                 .environmentObject(shared)
                 .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
-                .tint(Theme.accent)
+                .tint(TintStore.base)
         }
         .onChange(of: phase) { _, p in
             switch p {

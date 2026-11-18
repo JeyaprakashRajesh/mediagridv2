@@ -94,7 +94,7 @@ struct ProfileView: View {
     private var appearanceCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Appearance").font(.headline)
+                HStack(spacing: 10) { IconBadge(symbol: "circle.lefthalf.filled", color: Theme.violet, size: 30); Text("Appearance").font(.headline) }
                 Picker("Theme", selection: $appearance) {
                     Text("System").tag(0); Text("Light").tag(1); Text("Dark").tag(2)
                 }
@@ -107,7 +107,7 @@ struct ProfileView: View {
         GlassCard(tint: Theme.accent) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Image(systemName: "photo.stack.fill").font(.title2).foregroundStyle(Theme.accent)
+                    IconBadge(symbol: "photo.stack", color: Theme.pink, size: 38)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Photo backup to PC").font(.headline)
                         Text(photos.running ? photos.status : photos.lastSync.map { "Last backup \($0.relative)" } ?? "Not backed up yet")
@@ -135,9 +135,9 @@ struct ProfileView: View {
     private var connectionCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Connection").font(.headline)
-                row("desktopcomputer", "PC", conn.pcName)
-                row(conn.host.hasPrefix("100.") ? "lock.shield.fill" : "wifi", conn.host.hasPrefix("100.") ? "Tailscale" : "Wi-Fi", conn.host)
+                HStack(spacing: 10) { IconBadge(symbol: "wifi", color: Theme.cyan, size: 30); Text("Connection").font(.headline) }
+                row("desktopcomputer", "PC", conn.pcName, Theme.cyan)
+                row(conn.host.hasPrefix("100.") ? "lock.shield.fill" : "wifi", conn.host.hasPrefix("100.") ? "Tailscale" : "Wi-Fi", conn.host, Theme.mint)
                 if !conn.discovered.isEmpty {
                     Divider().opacity(0.3)
                     Text("Found nearby").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -164,9 +164,9 @@ struct ProfileView: View {
         }
     }
 
-    private func row(_ icon: String, _ k: String, _ v: String) -> some View {
+    private func row(_ icon: String, _ k: String, _ v: String, _ c: Color = Theme.violet) -> some View {
         HStack {
-            Image(systemName: icon).foregroundStyle(Theme.violet).frame(width: 24)
+            IconBadge(symbol: icon, color: c, size: 28)
             Text(k).foregroundStyle(.secondary)
             Spacer()
             Text(v).fontWeight(.semibold).lineLimit(1).textSelection(.enabled)
