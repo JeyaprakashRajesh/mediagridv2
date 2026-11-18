@@ -46,20 +46,13 @@ const ICON = {
 };
 
 /* ---------------- appearance: system light/dark + accent ---------------- */
-const ACCENTS = [["gold", "Gold", "#b5791a", "#e0b05a"], ["emerald", "Emerald", "#1f9d6b", "#5fd3a1"], ["ruby", "Ruby", "#c2334d", "#ef7b90"], ["sapphire", "Sapphire", "#2f6fde", "#8fb4f5"],
-  ["teal", "Teal", "#138a8a", "#6fd0d0"], ["amber", "Amber", "#d9791c", "#f5b66b"], ["slate", "Slate", "#64748b", "#b0bccd"], ["bronze", "Bronze", "#8a5a3c", "#d2a888"]];
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 function applyTheme() {
-  const mode = store.get("mg.theme", "system"), acc = ACCENTS.find((a) => a[0] === store.get("mg.accent", "gold")) || ACCENTS[0];
+  const mode = store.get("mg.theme", "system");
   const root = document.documentElement;
   root.dataset.theme = mode === "system" ? (darkQuery.matches ? "dark" : "light") : mode;
-  root.style.setProperty("--accent", acc[2]);
-  root.style.setProperty("--accent-rgb", [1, 3, 5].map((i) => parseInt(acc[2].slice(i, i + 2), 16)).join(", "));
-  root.style.setProperty("--accent-text", root.dataset.theme === "dark" ? acc[3] : acc[2]);
   $$("#theme-seg button").forEach((b) => b.classList.toggle("active", b.dataset.m === mode));
-  $("#swatches").innerHTML = ACCENTS.map((a) => `<button class="swatch ${a[0] === acc[0] ? "on" : ""}" data-a="${a[0]}" title="${a[1]}" style="background:${a[2]}">${a[0] === acc[0] ? '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>' : ""}</button>`).join("");
-  $$("#swatches .swatch").forEach((b) => (b.onclick = () => { store.set("mg.accent", b.dataset.a); applyTheme(); }));
 }
 $$("#theme-seg button").forEach((b) => (b.onclick = () => { store.set("mg.theme", b.dataset.m); applyTheme(); }));
 darkQuery.addEventListener("change", applyTheme); // follow the system setting live
@@ -80,7 +73,7 @@ function showTab(name) {
   if (name === "mobile") loadDevices();
   if (name === "shared") loadShared();
 }
-$$(".nav").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+$$(".nav").forEach((b) => { b.title = b.querySelector("span")?.textContent || ""; b.onclick = () => showTab(b.dataset.tab); });
 
 /* ---------------- music ---------------- */
 const greet = () => { const h = new Date().getHours(); return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
@@ -107,6 +100,7 @@ function applyPlayback(p) {
 function renderRecent() {
   const items = getRecent().map((x) => ({ ...x, t: tracks.find((t) => t.id === x.id) })).filter((x) => x.t);
   $("#recent-wrap").hidden = !items.length;
+  $("#recent-wrap h3").textContent = player.cur && !audio.paused ? "Currently playing" : "Recently played";
   const g = $("#music-glow"), first = items[0];
   g.style.backgroundImage = first && first.t.has_art ? `url('${url("/api/music/art/" + first.t.id)}')` : "none";
   $("#recent-row").innerHTML = items.map((x, i) => `
@@ -117,6 +111,7 @@ function renderRecent() {
     </button>`).join("");
   $$("#recent-row .recent").forEach((b) => (b.onclick = () => {
     const x = items[+b.dataset.i], list = items.map((y) => y.t);
+    if (player.cur && player.cur.id === x.t.id) { player.toggle(); return; }
     player.playList(list, +b.dataset.i);
     if (x.pos > 3) audio.addEventListener("loadedmetadata", () => (audio.currentTime = x.pos), { once: true });
   }));

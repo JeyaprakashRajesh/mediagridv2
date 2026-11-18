@@ -21,6 +21,7 @@ final class Player: ObservableObject {
     @Published var time: Double = 0
     @Published var duration: Double = 0
     @Published var source: String = ""
+    @Published var collectionID: String?
     @Published var buffering = false
 
     private let player = AVPlayer()
@@ -76,8 +77,9 @@ final class Player: ObservableObject {
     // MARK: queue
 
     /// Play a list. `start` nil + shuffle = random first song.
-    func play(_ list: [Track], start: Track? = nil, shuffle forceShuffle: Bool? = nil, source: String = "") {
+    func play(_ list: [Track], start: Track? = nil, shuffle forceShuffle: Bool? = nil, source: String = "", collectionID: String? = nil) {
         guard !list.isEmpty else { return }
+        self.collectionID = collectionID
         if let s = forceShuffle, s != shuffle { shuffle = s }
         queue = list
         self.source = source
@@ -89,7 +91,10 @@ final class Player: ObservableObject {
 
     /// Continue a song from "Recently played" at the position where it was left.
     func playRecent(_ t: Track, in list: [Track], pos: Double = 0) {
-        play(list, start: t, source: "Recently played")
+        let d = UserDefaults.standard
+        let same = d.string(forKey: "mg.resumeID") == t.id
+        play(list, start: t, source: same ? (d.string(forKey: "mg.lastSource") ?? "Recently played") : "Recently played",
+             collectionID: same ? d.string(forKey: "mg.lastCollection") : nil)
         if pos > 3 { seek(pos) }
     }
 
@@ -107,6 +112,8 @@ final class Player: ObservableObject {
         guard let t = current else { return }
         UserDefaults.standard.set(t.id, forKey: "mg.resumeID")
         UserDefaults.standard.set(time, forKey: "mg.resumeTime")
+        UserDefaults.standard.set(source, forKey: "mg.lastSource")
+        UserDefaults.standard.set(collectionID, forKey: "mg.lastCollection")
     }
 
     func shuffleAll() {

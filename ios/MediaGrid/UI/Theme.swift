@@ -1,27 +1,17 @@
 import SwiftUI
 
-/// Material-style theme: flat grey surfaces, one accent colour (Settings → Appearance),
-/// Liquid Glass for controls. Legacy names (violet, cyan, pink, mint) now map to the accent / standard colours.
+/// Monochrome theme: black & white only. The "accent" is white on dark and black on light,
+/// so everything adapts to the system appearance. Colour only ever comes from cover art.
 enum Theme {
-    static let accents: [(id: String, name: String, color: Color)] = [
-        ("gold", "Gold", Color(hex: 0xB5791A)), ("emerald", "Emerald", Color(hex: 0x1F9D6B)),
-        ("ruby", "Ruby", Color(hex: 0xC2334D)), ("sapphire", "Sapphire", Color(hex: 0x2F6FDE)),
-        ("teal", "Teal", Color(hex: 0x138A8A)), ("amber", "Amber", Color(hex: 0xD9791C)),
-        ("slate", "Slate", Color(hex: 0x64748B)), ("bronze", "Bronze", Color(hex: 0x8A5A3C)),
-    ]
-    static var accent: Color {
-        let id = UserDefaults.standard.string(forKey: "mg.accent") ?? "gold"
-        return (accents.first { $0.id == id } ?? accents[0]).color
-    }
+    static var accent: Color { Color(UIColor { $0.userInterfaceStyle == .dark ? .white : .black }) }
+    static var onAccent: Color { Color(UIColor { $0.userInterfaceStyle == .dark ? .black : .white }) }
     static var violet: Color { accent }
     static var cyan: Color { accent }
-    static var pink: Color { Color(hex: 0xE5484D) }   // likes / destructive
-    static let mint = Color(hex: 0x2FB67C)            // success / downloaded
-    /// Flat surface that follows the system light / dark setting.
-    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.055, green: 0.059, blue: 0.071, alpha: 1)   // #0E0F12
-                                                                   : UIColor(red: 0.965, green: 0.957, blue: 0.937, alpha: 1) })  // #F6F4EF
+    static var pink: Color { accent }
+    static var mint: Color { accent }
     static var brand: Color { accent }
-    static let palettes: [[Color]] = accents.map { [$0.color] }
+    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.04, alpha: 1) : UIColor(white: 0.96, alpha: 1) })
+    static let palettes: [[Color]] = [0x2A2A2E, 0x38383D, 0x46464C, 0x1F1F23, 0x54545B, 0x303035].map { [Color(hex: $0)] }
 }
 
 /// Plain grey Material surface; Liquid Glass elements sit on top of it.
@@ -62,9 +52,9 @@ struct StatusDot: View {
     @State private var pulse = false
     var color: Color {
         switch state {
-        case .online: return Theme.mint
-        case .connecting: return .orange
-        default: return .red
+        case .online: return Theme.accent
+        case .connecting: return .gray
+        default: return Theme.accent.opacity(0.3)
         }
     }
     var body: some View {

@@ -64,6 +64,13 @@ struct NowPlayingView: View {
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
     @State private var showQueue = false
+    @State private var downloading = false
+    @ObservedObject private var ui = UIState.shared
+
+    private var goTarget: SongCollection? {
+        guard let id = player.collectionID, let c = music.collection(id: id) else { return nil }
+        return ui.musicPath.last?.id == c.id ? nil : c
+    }
 
     private var shown: Double { scrubbing ? scrubValue : player.time }
 
@@ -89,6 +96,11 @@ struct NowPlayingView: View {
                 .frame(maxHeight: .infinity)
             }
 
+            if let c = goTarget {
+                Button { ui.goTo(c); Haptics.tap() } label: { Label("Go to playlist", systemImage: "music.note.list").font(.subheadline.weight(.semibold)) }
+                    .buttonStyle(.glass)
+            }
+
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(t?.title ?? "Not Playing").font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.75)
@@ -108,9 +120,11 @@ struct NowPlayingView: View {
 
             // scrubber
             VStack(spacing: 4) {
-                WavySeekBar(progress: player.duration > 0 ? shown / player.duration : 0, playing: player.isPlaying,
-                            onScrub: { scrubbing = true; scrubValue = $0 * max(player.duration, 1) },
-                            onCommit: { player.seek($0 * max(player.duration, 1)); scrubbing = false })
+                Slider(value: Binding(get: { shown }, set: { scrubValue = $0 }), in: 0...max(player.duration, 1)) { editing in
+                    if editing { scrubValue = player.time; scrubbing = true }
+                    else { player.seek(scrubValue); scrubbing = false }
+                }
+                .tint(.white)
                 HStack {
                     Text(shown.mmss)
                     Spacer()
@@ -156,6 +170,18 @@ struct NowPlayingView: View {
                         .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
                 }
                 Spacer()
+                if let t {
+                    Button {
+                        downloading = true
+                        Task { try? await music.download(t); downloading = false; Haptics.success() }
+                    } label: {
+                        if downloading { ProgressView() }
+                        else { Image(systemName: music.isDownloaded(t) ? "checkmark.circle.fill" : "arrow.down.circle").font(.title3) }
+                    }
+                    .frame(width: 34, height: 34)
+                    .disabled(music.isDownloaded(t) || downloading)
+                    .accessibilityLabel(music.isDownloaded(t) ? "Downloaded" : "Download")
+                }
                 ShareLink(item: t.map { "\($0.title) — \($0.artist)" } ?? "") { Image(systemName: "square.and.arrow.up") }
                     .frame(width: 34, height: 34)
             }
@@ -239,44 +265,4 @@ struct AirPlayButton: UIViewRepresentable {
         return v
     }
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
-}
-
-/// Material-style "wavy" progress: the played part ripples while music plays and flattens when you drag.
-struct WavySeekBar: View {
-    var progress: Double
-    var playing: Bool
-    var onScrub: (Double) -> Void
-    var onCommit: (Double) -> Void
-    @State private var dragging = false
-
-    var body: some View {
-        GeometryReader { g in
-            let w = g.size.width
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing && !dragging)) { ctx in
-                let phase = ctx.date.timeIntervalSinceReferenceDate * 4
-                Canvas { c, size in
-                    let mid = size.height / 2
-                    let x = size.width * min(max(progress, 0), 1)
-                    let amp: CGFloat = dragging ? 0 : (playing ? 5 : 1.5)
-                    func y(_ px: CGFloat) -> CGFloat { mid + sin(px / 9 + phase) * amp * min(1, px / 24) }
-                    var played = Path()
-                    played.move(to: CGPoint(x: 0, y: y(0)))
-                    var px: CGFloat = 0
-                    while px < x { px += 2; played.addLine(to: CGPoint(x: min(px, x), y: y(min(px, x)))) }
-                    var rest = Path()
-                    rest.move(to: CGPoint(x: x, y: mid)); rest.addLine(to: CGPoint(x: size.width, y: mid))
-                    c.stroke(rest, with: .color(.white.opacity(0.28)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    c.stroke(played, with: .color(.white), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                    let r: CGFloat = dragging ? 11 : 7
-                    c.fill(Path(ellipseIn: CGRect(x: x - r, y: y(x) - r, width: r * 2, height: r * 2)), with: .color(.white))
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in dragging = true; onScrub(min(max(v.location.x / w, 0), 1)) }
-                .onEnded { v in onCommit(min(max(v.location.x / w, 0), 1)); dragging = false })
-            .animation(.smooth(duration: 0.2), value: dragging)
-        }
-        .frame(height: 34)
-    }
 }

@@ -27,6 +27,9 @@ struct MusicView: View {
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var player: Player
     @EnvironmentObject var conn: Connection
+    @ObservedObject private var ui = UIState.shared
+    @FocusState private var searchFocused: Bool
+    @State private var coverTint: Color?
     @State private var search = ""
     @State private var newPlaylist = false
     @State private var playlistName = ""
@@ -37,7 +40,7 @@ struct MusicView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $ui.musicPath) {
             ZStack {
                 AppBackground()
                 recentGlow
@@ -52,6 +55,12 @@ struct MusicView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button { searchFocused = false } label: { Image(systemName: "keyboard.chevron.compact.down") }
+                }
+            }
             .navigationDestination(for: SongCollection.self) { CollectionView(collection: $0) }
             .refreshable { await music.refresh() }
             .alert("New Playlist", isPresented: $newPlaylist) {
@@ -62,19 +71,19 @@ struct MusicView: View {
         }
     }
 
-    /// Soft gradient at the top of the Music screen, coloured by the artwork of the last song you played.
+    /// Soft gradient at the top of the Music screen, coloured by the cover of the song playing (or last played).
     @ViewBuilder private var recentGlow: some View {
-        if let r = music.recentlyPlayed.first {
+        if let t = player.current ?? music.recentlyPlayed.first?.track {
             VStack(spacing: 0) {
                 Color.clear.frame(height: 380)
-                    .overlay { ArtworkView(track: r.track, size: 500, radius: 0).blur(radius: 70).scaleEffect(1.5).opacity(0.55) }
+                    .overlay { ArtworkView(track: t, size: 500, radius: 0).blur(radius: 70).scaleEffect(1.5).opacity(0.55) }
                     .clipped()
                     .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
                 Spacer()
             }
             .ignoresSafeArea()
             .allowsHitTesting(false)
-            .animation(.smooth, value: r.track.id)
+            .animation(.smooth, value: t.id)
         }
     }
 
@@ -94,7 +103,7 @@ struct MusicView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Songs, artists, albums", text: $search).submitLabel(.search)
+            TextField("Songs, artists, albums", text: $search).submitLabel(.search).focused($searchFocused)
             if !search.isEmpty {
                 Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
             }
@@ -115,15 +124,21 @@ struct MusicView: View {
                 if music.tracks.isEmpty {
                     emptyState
                 } else {
-                    let mixes = music.mixes
+                    let cards = madeForYou(music.mixes)
                     recentSection
-                    if mixes.count > 1 {
+                    if !cards.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "Made for you")
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(spacing: 14) {
-                                    ForEach(mixes) { m in
-                                        NavigationLink(value: SongCollection(mix: m)) { MixCard(mix: m) }.buttonStyle(.plain)
+                                    ForEach(cards) { c in
+                                        NavigationLink(value: c) {
+                                            VStack(alignment: .leading, spacing: 8) {
+                                                MixArt(colors: c.colors, tracks: c.tracks, symbol: c.symbol, title: c.title, size: 170).cardShadow()
+                                                Text(c.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(width: 170, alignment: .leading)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
                                     }
                                 }
                                 .padding(.horizontal, 20)
@@ -135,30 +150,22 @@ struct MusicView: View {
                     playlistsSection
                     albumsSection
                     artistsSection
-                    NavigationLink(value: SongCollection(id: "all", title: "All Songs", subtitle: "\(music.tracks.count) songs",
-                                                         colors: [Theme.violet, Theme.cyan], tracks: music.tracks)) {
-                        HStack {
-                            Image(systemName: "music.note.list").font(.title2).frame(width: 52, height: 52)
-                                .background(Theme.brand, in: .rect(cornerRadius: 14))
-                            VStack(alignment: .leading) {
-                                Text("All Songs").font(.headline)
-                                Text("\(music.tracks.count) songs · \(music.downloaded.count) on iPhone").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-                        }
-                        .padding(14)
-                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 20)
                 }
             }
             .padding(.vertical, 12)
             .padding(.bottom, 40)
         }
         .scrollIndicators(.hidden)
-        .trackScrollDirection()
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// Mixes + "All Songs" right after Recently Added. (Downloaded lives under My playlists.)
+    private func madeForYou(_ mixes: [SmartMix]) -> [SongCollection] {
+        var out = mixes.filter { $0.id != "offline" }.map { SongCollection(mix: $0) }
+        if let all = music.collection(id: "all") {
+            out.insert(all, at: out.firstIndex { $0.id == "recent" }.map { $0 + 1 } ?? 0)
+        }
+        return out
     }
 
     private var emptyState: some View {
@@ -197,33 +204,52 @@ struct MusicView: View {
         .accessibilityLabel(music.syncing ? "Stop sync" : "Sync \(pending) songs for offline")
     }
 
-    /// "Continue where you left off": just the last song you played, as one big full-width card.
+    /// Currently playing (when something is on) or the last song you played. Tap the card for the song page;
+    /// the round button plays / pauses without restarting.
     @ViewBuilder private var recentSection: some View {
         let recent = music.recentlyPlayed
-        if let item = recent.first {
+        let playing = player.current
+        if let item = playing.map({ (track: $0, at: Date(), pos: player.time) }) ?? recent.first {
             let list = recent.map(\.track)
+            let isCurrent = player.current?.id == item.track.id
+            let src = isCurrent ? player.source : (UserDefaults.standard.string(forKey: "mg.lastSource") ?? "")
             VStack(alignment: .leading, spacing: 12) {
-                SectionHeader(title: "Recently played")
-                Button { player.playRecent(item.track, in: list, pos: item.pos); Haptics.tap() } label: {
-                    HStack(spacing: 16) {
-                        ArtworkView(track: item.track, size: 116, radius: 22).cardShadow()
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(item.track.title).font(.title3.weight(.bold)).lineLimit(2)
-                            Text(item.track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                SectionHeader(title: playing != nil ? "Currently playing" : "Recently played")
+                HStack(spacing: 16) {
+                    ArtworkView(track: item.track, size: 116, radius: 22).cardShadow()
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.track.title).font(.title3.weight(.bold)).lineLimit(2)
+                        Text(item.track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        if !src.isEmpty {
+                            Label(src, systemImage: "music.note.list").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        if !isCurrent {
                             Label(item.pos > 3 ? "\(item.at.relative) · resume \(item.pos.mmss)" : item.at.relative, systemImage: "clock")
                                 .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: player.current?.id == item.track.id && player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title2).foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        if isCurrent { player.toggle() } else { player.playRecent(item.track, in: list, pos: item.pos) }
+                        Haptics.tap()
+                    } label: {
+                        Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2).foregroundStyle(Theme.onAccent)
+                            .contentTransition(.symbolEffect(.replace))
                             .frame(width: 58, height: 58)
                             .background(Theme.accent, in: .circle)
                     }
-                    .padding(14)
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 30))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .padding(14)
+                .glassEffect((coverTint.map { Glass.regular.tint($0.opacity(0.4)) } ?? Glass.regular).interactive(), in: .rect(cornerRadius: 30))
+                .contentShape(.rect(cornerRadius: 30))
+                .onTapGesture {
+                    if !isCurrent { player.playRecent(item.track, in: list, pos: item.pos) }
+                    ui.openPlayer()
+                }
                 .padding(.horizontal, 20)
+                .task(id: item.track.id) { coverTint = await ArtColors.shared.color(for: item.track) }
             }
         }
     }
@@ -233,6 +259,15 @@ struct MusicView: View {
             SectionHeader(title: "My playlists", action: music.playlists.isEmpty ? nil : "New") { newPlaylist = true }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
+                    if let d = music.collection(id: "offline"), !d.tracks.isEmpty {
+                        NavigationLink(value: d) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                MixArt(colors: d.colors, tracks: d.tracks, symbol: d.symbol, title: d.title, size: 170).cardShadow()
+                                Text("\(d.tracks.count) songs").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                     if music.playlists.isEmpty {
                         addPlaylistTile
                     }
@@ -426,17 +461,17 @@ struct CollectionView: View {
 
                 GlassEffectContainer(spacing: 12) {
                     HStack(spacing: 12) {
-                        let here = player.source == collection.title && player.current != nil
+                        let here = player.collectionID == collection.id && player.current != nil
                         Button {
-                            if here { player.toggle() } else { player.play(ts, shuffle: false, source: collection.title) }
+                            if here { player.toggle() } else { player.play(ts, shuffle: false, source: collection.title, collectionID: collection.id) }
                             Haptics.soft()
                         } label: {
                             Label(here && player.isPlaying ? "Pause" : "Play", systemImage: here && player.isPlaying ? "pause.fill" : "play.fill")
                                 .contentTransition(.symbolEffect(.replace))
                                 .frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
-                        .buttonStyle(.glassProminent).tint(Theme.accent)
-                        Button { player.play(ts, shuffle: true, source: collection.title); Haptics.soft() } label: {
+                        .buttonStyle(.glassProminent).tint(Theme.accent).foregroundStyle(Theme.onAccent)
+                        Button { player.play(ts, shuffle: true, source: collection.title, collectionID: collection.id); Haptics.soft() } label: {
                             Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
                         .buttonStyle(.glass)
@@ -452,7 +487,7 @@ struct CollectionView: View {
 
                 LazyVStack(spacing: 2) {
                     ForEach(ts) { t in
-                        TrackRow(track: t, playlist: collection.playlist) { player.play(ts, start: t, shuffle: false, source: collection.title) }
+                        TrackRow(track: t, playlist: collection.playlist) { player.play(ts, start: t, shuffle: false, source: collection.title, collectionID: collection.id) }
                     }
                 }
                 .padding(8)
@@ -463,7 +498,6 @@ struct CollectionView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.ink.ignoresSafeArea())
-        .trackScrollDirection()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if collection.playlist == nil {
@@ -499,6 +533,7 @@ struct SongList: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 60)
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 }
 
@@ -508,10 +543,11 @@ struct TrackRow: View {
     let onTap: () -> Void
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var player: Player
+    @State private var tint: Color?
 
     var body: some View {
         let isCurrent = player.current?.id == track.id
-        Button(action: onTap) {
+        Button { if isCurrent { UIState.shared.openPlayer() } else { onTap() } } label: {
             HStack(spacing: 12) {
                 ArtworkView(track: track, size: 48, radius: 10)
                 VStack(alignment: .leading, spacing: 2) {
@@ -535,10 +571,11 @@ struct TrackRow: View {
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(isCurrent ? Theme.violet.opacity(0.12) : .clear, in: .rect(cornerRadius: 14))
+            .background(isCurrent ? (tint ?? Theme.accent).opacity(0.28) : .clear, in: .rect(cornerRadius: 14))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .task(id: isCurrent) { if isCurrent { tint = await ArtColors.shared.color(for: track) } }
         .contextMenu { menuItems }
     }
 
@@ -561,5 +598,30 @@ struct TrackRow: View {
         } else {
             Button { Task { try? await music.download(track) } } label: { Label("Download", systemImage: "arrow.down.circle") }
         }
+    }
+}
+
+extension MusicStore {
+    /// Rebuild a playlist / mix / album page from its id (used by "Go to playlist").
+    func collection(id: String) -> SongCollection? {
+        let grey = [Color(hex: 0x38383D)]
+        if id == "all" {
+            return SongCollection(id: "all", title: "All Songs", subtitle: "\(tracks.count) songs", symbol: "music.note.list", colors: grey, tracks: tracks)
+        }
+        if id == "offline" {
+            let ts = tracks.filter { downloaded.contains($0.id) }
+            return SongCollection(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill", colors: [Color(hex: 0x57575E)], tracks: ts)
+        }
+        if id.hasPrefix("pl-"), let p = playlists.first(where: { "pl-\($0.id)" == id }) {
+            let ts = tracks(for: p)
+            return SongCollection(id: id, title: p.name, subtitle: "\(ts.count) songs", colors: grey, tracks: ts, artTrack: ts.first, playlist: p)
+        }
+        if id.hasPrefix("al-"), let a = albums.first(where: { "al-\($0.name)" == id }) {
+            return SongCollection(id: id, title: a.name, subtitle: a.artist, colors: grey, tracks: a.tracks, artTrack: a.tracks.first)
+        }
+        if id.hasPrefix("ar-"), let a = artists.first(where: { "ar-\($0.name)" == id }) {
+            return SongCollection(id: id, title: a.name, subtitle: "\(a.tracks.count) songs", colors: grey, tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))
+        }
+        return mixes.first(where: { $0.id == id }).map { SongCollection(mix: $0) }
     }
 }

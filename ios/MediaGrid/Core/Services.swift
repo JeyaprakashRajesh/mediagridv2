@@ -35,9 +35,7 @@ final class LiveActivityManager {
         state.done = done
         state.total = total
         state.finished = false
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
-        UIColor(Theme.accent).getRed(&r, green: &g, blue: &b, alpha: nil)
-        state.accent = [Double(r), Double(g), Double(b)]
+        state.accent = [1, 1, 1]   // monochrome
         guard Date().timeIntervalSince(lastPush) > 0.8 || done == 0 || done >= total else { return }
         push()
     }

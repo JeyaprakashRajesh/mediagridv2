@@ -21,7 +21,7 @@ struct OnboardingView: View {
                         .padding(.top, 50)
                     VStack(spacing: 8) {
                         Text("MediaGrid").font(.system(size: 40, weight: .heavy, design: .rounded))
-                            .foregroundStyle(LinearGradient(colors: [.white, Color(hex: 0xCFC8FF)], startPoint: .top, endPoint: .bottom))
+                            .foregroundStyle(.white)
                         Text("Your PC's music, photos and files —\nright here on your iPhone.")
                             .multilineTextAlignment(.center).font(.callout).foregroundStyle(.secondary)
                     }
@@ -65,7 +65,7 @@ struct OnboardingView: View {
 
                     if let error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote).foregroundStyle(Color(hex: 0xFF8AA8))
+                            .font(.footnote).foregroundStyle(.secondary)
                             .padding(.horizontal, 28).transition(.opacity)
                     }
 

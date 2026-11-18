@@ -7,9 +7,7 @@ struct RootView: View {
     @EnvironmentObject var coord: Coordinator
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var media: MediaStore
-    @State private var tab: AppTab = .music
-    @State private var showPlayer = false
-    @AppStorage("mg.accent") private var accent = "gold"
+    @ObservedObject private var ui = UIState.shared
 
     var body: some View {
         ZStack {
@@ -38,22 +36,22 @@ struct RootView: View {
     }
 
     private var tabs: some View {
-        TabView(selection: $tab) {
-            Tab("Music", systemImage: "music.note", value: AppTab.music) { MusicView() }
-            Tab("Media", systemImage: "photo.on.rectangle.angled", value: AppTab.media) { MediaView() }
-            Tab("Shared", systemImage: "doc.on.clipboard", value: AppTab.shared) { SharedView() }
-            Tab("PC", systemImage: "desktopcomputer", value: AppTab.pc) { PCView() }
-            Tab("Profile", systemImage: "person.crop.circle", value: AppTab.profile) { ProfileView() }
+        // Icons only: every tab is recognisable from its symbol (names stay for VoiceOver).
+        TabView(selection: $ui.tab) {
+            Tab(value: AppTab.music) { MusicView() } label: { Image(systemName: "music.note.house").accessibilityLabel("Music") }
+            Tab(value: AppTab.media) { MediaView() } label: { Image(systemName: "photo.stack").accessibilityLabel("Media") }
+            Tab(value: AppTab.shared) { SharedView() } label: { Image(systemName: "doc.on.clipboard").accessibilityLabel("Shared") }
+            Tab(value: AppTab.pc) { PCView() } label: { Image(systemName: "desktopcomputer").accessibilityLabel("PC") }
+            Tab(value: AppTab.profile) { ProfileView() } label: { Image(systemName: "person.crop.circle").accessibilityLabel("Profile") }
         }
-        .id(accent) // rebuild so every view re-reads the accent colour
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory {
-            MiniPlayer { withAnimation(.smooth(duration: 0.4)) { showPlayer = true } }
+            MiniPlayer { ui.openPlayer() }
         }
         // Full-screen page that pushes in like a navigation stack (not a drawer sheet).
         .overlay {
-            if showPlayer {
-                NowPlayingView { withAnimation(.smooth(duration: 0.4)) { showPlayer = false } }
+            if ui.showPlayer {
+                NowPlayingView { ui.closePlayer() }
                     .transition(.move(edge: .trailing))
                     .zIndex(1)
             }

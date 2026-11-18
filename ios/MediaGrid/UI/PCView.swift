@@ -460,17 +460,17 @@ struct FileRow: View {
             case "Documents": return ("doc.text.fill", Theme.cyan)
             case "Downloads": return ("arrow.down.circle.fill", Theme.mint)
             case "Music": return ("music.note", Theme.pink)
-            case "Pictures": return ("photo.fill", .orange)
-            case "Videos": return ("film.fill", .red)
+            case "Pictures": return ("photo.fill", Theme.accent)
+            case "Videos": return ("film.fill", Theme.accent)
             default: return ("folder.fill", Theme.violet)
             }
         }
         if entry.dir { return ("folder.fill", Theme.violet) }
-        if entry.isImage { return ("photo", .orange) }
-        if entry.isVideo { return ("play.rectangle.fill", .red) }
+        if entry.isImage { return ("photo", Theme.accent) }
+        if entry.isVideo { return ("play.rectangle.fill", Theme.accent) }
         if entry.isAudio { return ("music.note", Theme.pink) }
         switch entry.lowerExt {
-        case "pdf": return ("doc.richtext.fill", .red)
+        case "pdf": return ("doc.richtext.fill", Theme.accent)
         case "zip", "rar", "7z": return ("doc.zipper", .gray)
         case "exe", "msi": return ("app.badge", Theme.cyan)
         case "txt", "md", "log": return ("doc.plaintext", .secondary)

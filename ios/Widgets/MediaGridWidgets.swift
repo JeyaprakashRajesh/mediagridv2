@@ -10,7 +10,7 @@ struct MediaGridWidgets: WidgetBundle {
 }
 
 private extension MediaGridActivity.ContentState {
-    var tint: Color { accent.count == 3 ? Color(red: accent[0], green: accent[1], blue: accent[2]) : .blue }
+    var tint: Color { accent.count == 3 ? Color(red: accent[0], green: accent[1], blue: accent[2]) : .white }
     var fraction: Double { min(1, Double(done) / Double(max(total, 1))) }
     var percent: Int { Int((fraction * 100).rounded()) }
     var icon: String { finished ? "checkmark" : label.localizedCaseInsensitiveContains("music") ? "music.note"

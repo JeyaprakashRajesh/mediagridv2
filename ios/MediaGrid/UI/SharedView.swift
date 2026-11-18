@@ -33,6 +33,7 @@ struct SharedView: View {
                     .padding(.bottom, 60)
                 }
                 .refreshable { await store.refresh() }
+                .scrollDismissesKeyboard(.interactively)
             }
             .toolbar(.hidden, for: .navigationBar)
             .task { await store.refresh() }
@@ -54,12 +55,12 @@ struct SharedView: View {
         let online = conn.state == .online
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                Image(systemName: "doc.on.clipboard.fill").font(.title2).foregroundStyle(.white)
+                Image(systemName: "doc.on.clipboard.fill").font(.title2).foregroundStyle(Theme.onAccent)
                     .frame(width: 52, height: 52).background(Theme.accent, in: .rect(cornerRadius: 16))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Universal Clipboard").font(.headline)
                     HStack(spacing: 6) {
-                        Circle().fill(clip.auto && online ? Theme.mint : .orange).frame(width: 8, height: 8)
+                        Circle().fill(clip.auto && online ? Theme.accent : Color.gray).frame(width: 8, height: 8)
                         Text(!clip.auto ? "Paused" : online ? "In sync with \(conn.pcName)" : "Waiting for your PC…")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
@@ -112,7 +113,7 @@ struct SharedView: View {
     private var history: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("History").font(.title3.weight(.bold))
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
             if store.items.isEmpty {
                 Text("Things you copy or send between your PC and iPhone show up here.")
                     .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 30).frame(maxWidth: .infinity)

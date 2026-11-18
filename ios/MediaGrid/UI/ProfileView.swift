@@ -29,7 +29,7 @@ struct ProfileView: View {
                         Button(role: .destructive) { confirmSignOut = true } label: {
                             Text("Sign out").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                         }
-                        .buttonStyle(.glass).tint(.red)
+                        .buttonStyle(.glass).tint(Theme.accent)
                         Text("MediaGrid \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · Made for Jeyaprakash's PC")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -99,19 +99,6 @@ struct ProfileView: View {
                     Text("System").tag(0); Text("Light").tag(1); Text("Dark").tag(2)
                 }
                 .pickerStyle(.segmented)
-                Text("Accent colour").font(.subheadline).foregroundStyle(.secondary)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 14) {
-                    ForEach(Theme.accents, id: \.id) { a in
-                        Button { accent = a.id; Haptics.tap() } label: {
-                            VStack(spacing: 6) {
-                                Circle().fill(a.color).frame(width: 40, height: 40)
-                                    .overlay { if accent == a.id { Image(systemName: "checkmark").font(.subheadline.weight(.bold)).foregroundStyle(.white) } }
-                                Text(a.name).font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
             }
         }
     }
@@ -133,7 +120,7 @@ struct ProfileView: View {
                     } label: {
                         Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: photos.running)
                     }
-                    .buttonStyle(.glassProminent).tint(Theme.accent).disabled(photos.running || conn.state != .online)
+                    .buttonStyle(.glassProminent).tint(Theme.accent).foregroundStyle(Theme.onAccent).disabled(photos.running || conn.state != .online)
                 }
                 if photos.running && photos.total > 0 {
                     ProgressView(value: Double(photos.done), total: Double(photos.total)).tint(Theme.accent)
