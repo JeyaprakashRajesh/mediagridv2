@@ -6,112 +6,105 @@ import QuickLook
 
 struct PCView: View {
     @EnvironmentObject var conn: Connection
-    @State private var section = 0
+    @State private var section = 0   // 0 Files (default), 1 Access PC
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground()
                 VStack(spacing: 12) {
+                    header
                     Picker("", selection: $section.animation(.smooth)) {
-                        Label("Remote", systemImage: "hand.point.up.left").tag(0)
-                        Label("Screen", systemImage: "display").tag(1)
-                        Label("Files", systemImage: "folder").tag(2)
+                        Text("Files").tag(0)
+                        Text("Access PC").tag(1)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 20)
 
-                    switch section {
-                    case 0: RemoteControlView()
-                    case 1: ScreenView()
-                    default: FilesRoot()
-                    }
+                    if section == 0 { FilesRoot() } else { AccessPCView() }
                 }
             }
-            .navigationTitle(conn.pcName.isEmpty ? "PC" : conn.pcName)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 6) { StatusDot(state: conn.state); Text(conn.state == .online ? "Online" : "Offline").font(.caption.weight(.semibold)) }
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
+    }
+
+    /// PC name on the left, connection state (green / red dot) on the right.
+    private var header: some View {
+        let online = conn.state == .online
+        return HStack(spacing: 10) {
+            Text(conn.pcName.isEmpty ? "PC" : conn.pcName).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.6)
+            Spacer(minLength: 8)
+            HStack(spacing: 7) {
+                Circle().fill(online ? Color.green : Color.red).frame(width: 9, height: 9)
+                Text(online ? "Connected" : conn.state == .connecting ? "Connecting" : "Offline").font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .glassEffect(.regular, in: .capsule)
+        }
+        .padding(.horizontal, 20).padding(.top, 6)
     }
 }
 
-// MARK: - Remote control
+// MARK: - Access PC
 
-struct RemoteControlView: View {
+struct AccessPCView: View {
     @EnvironmentObject var conn: Connection
-    @State private var keyboard = " "
     @State private var confirm: String?
     @State private var showConfirm = false
-    @FocusState private var typing: Bool
-    @AppStorage("mg.sensitivity") private var sensitivity = 1.6
+    @State private var brightness = 70.0
+    @State private var wifi = true
+    @State private var bluetooth = true
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Trackpad(sensitivity: sensitivity)
-                    .frame(height: 300)
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 30))
-                    .overlay(alignment: .bottom) {
-                        Text("1 finger move · tap click · 2 fingers scroll · 2-finger tap right-click · hold to drag")
-                            .font(.caption2).foregroundStyle(.tertiary).padding(10).allowsHitTesting(false)
-                    }
-
-                GlassEffectContainer(spacing: 10) {
-                    HStack(spacing: 10) {
-                        pill("Left click") { send(["type": "click", "button": "left"]) }
-                        pill("Right click") { send(["type": "click", "button": "right"]) }
-                    }
-                }
-
-                // keyboard
-                HStack {
-                    Image(systemName: "keyboard").foregroundStyle(.secondary)
-                    TextField("Tap to type on your PC", text: $keyboard)
-                        .focused($typing)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onChange(of: keyboard) { old, new in typed(old: old, new: new) }
-                        .onSubmit { send(["type": "key", "key": "enter"]); keyboard = " "; typing = true }
-                    if typing { Button("Done") { typing = false }.font(.footnote.weight(.semibold)) }
-                }
-                .padding(14)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    GlassEffectContainer(spacing: 8) {
-                        HStack(spacing: 8) {
-                            ForEach(Self.keys, id: \.self) { pair in
-                                Button(pair[0]) { send(["type": "key", "key": pair[1]]) }
-                                    .font(.footnote.weight(.semibold))
-                                    .padding(.horizontal, 14).padding(.vertical, 10)
-                                    .glassEffect(.regular.interactive(), in: .capsule)
-                            }
+                NavigationLink { RemoteDesktopView() } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "arrow.right").font(.headline).foregroundStyle(.white)
+                            .frame(width: 46, height: 46).background(Theme.accent, in: .circle)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Remote desktop").font(.headline)
+                            Text("See and control your PC screen").font(.caption).foregroundStyle(.secondary)
                         }
-                        .padding(.horizontal, 2)
+                        Spacer()
                     }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26))
                 }
                 .buttonStyle(.plain)
 
-                // media
                 GlassCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("PC media").font(.headline)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Essential controls").font(.headline)
+
                         HStack {
-                            mediaBtn("backward.fill", "prev"); Spacer()
-                            mediaBtn("playpause.fill", "playpause"); Spacer()
-                            mediaBtn("forward.fill", "next"); Spacer()
-                            mediaBtn("speaker.minus.fill", "voldown"); Spacer()
-                            mediaBtn("speaker.slash.fill", "mute"); Spacer()
-                            mediaBtn("speaker.plus.fill", "volup")
+                            media("speaker.minus.fill", "voldown"); Spacer()
+                            media("speaker.slash.fill", "mute"); Spacer()
+                            media("speaker.plus.fill", "volup"); Spacer()
+                            media("backward.fill", "prev"); Spacer()
+                            media("playpause.fill", "playpause"); Spacer()
+                            media("forward.fill", "next")
                         }
+
+                        HStack(spacing: 12) {
+                            IconBadge(symbol: "sun.max.fill", color: .orange, size: 30)
+                            Slider(value: $brightness, in: 5...100) { editing in
+                                if !editing { sys("brightness", brightness) }
+                            }
+                        }
+
+                        Toggle(isOn: $wifi) { Label("Wi-Fi", systemImage: "wifi") }
+                            .onChange(of: wifi) { _, v in sys("wifi", v ? 1 : 0) }
+                        Toggle(isOn: $bluetooth) { Label("Bluetooth", systemImage: "wave.3.right") }
+                            .onChange(of: bluetooth) { _, v in sys("bluetooth", v ? 1 : 0) }
+                        Text("Brightness works on laptop screens. Wi-Fi needs MediaGrid on the PC to run as administrator.")
+                            .font(.caption2).foregroundStyle(.tertiary)
                     }
+                    .tint(Theme.accent)
+                    .font(.subheadline)
                 }
 
-                // power
                 GlassCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Power").font(.headline)
@@ -124,54 +117,27 @@ struct RemoteControlView: View {
                         }
                     }
                 }
-
-                VStack(alignment: .leading) {
-                    Text("Pointer speed").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: $sensitivity, in: 0.6...4).tint(Theme.violet)
-                }
-                .padding(.horizontal, 6)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 60)
         }
-        .scrollDisabled(false)
         .confirmationDialog("Are you sure?", isPresented: $showConfirm, titleVisibility: .visible) {
-            Button(confirm?.capitalized ?? "", role: .destructive) { if let c = confirm { send(["type": "power", "action": c]) }; confirm = nil }
+            Button(confirm?.capitalized ?? "", role: .destructive) { if let c = confirm { conn.send(["type": "power", "action": c]) }; confirm = nil }
         } message: { Text("This will \(confirm ?? "") your PC.") }
     }
 
-    static let keys: [[String]] = [["esc", "esc"], ["tab", "tab"], ["⌫", "backspace"], ["↵", "enter"], ["←", "left"], ["↑", "up"],
-                                   ["↓", "down"], ["→", "right"], ["⊞", "win"], ["Alt+Tab", "alt+tab"], ["Copy", "ctrl+c"],
-                                   ["Paste", "ctrl+v"], ["Undo", "ctrl+z"], ["Desktop", "win+d"], ["Task Mgr", "ctrl+shift+esc"],
-                                   ["F5", "f5"], ["Close", "alt+f4"]]
+    private func sys(_ action: String, _ value: Double) { conn.send(["type": "sys", "action": action, "value": value]); Haptics.tap() }
 
-    private func send(_ o: [String: Any]) { conn.send(o); Haptics.tap() }
-
-    private func typed(old: String, new: String) {
-        if new.count < old.count {
-            for _ in 0..<(old.count - new.count) { conn.send(["type": "key", "key": "backspace"]) }
-        } else if new.count > old.count, new.hasPrefix(old) {
-            conn.send(["type": "text", "text": String(new.dropFirst(old.count))])
-        } else if new != old {
-            conn.send(["type": "text", "text": new.trimmingCharacters(in: .whitespaces)])
+    private func media(_ icon: String, _ action: String) -> some View {
+        Button { conn.send(["type": "media", "action": action]); Haptics.tap() } label: {
+            Image(systemName: icon).font(.body).frame(width: 36, height: 36)
         }
-        if new.isEmpty || new.count > 60 { keyboard = " " }
-    }
-
-    private func pill(_ t: String, _ a: @escaping () -> Void) -> some View {
-        Button(action: a) { Text(t).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 14) }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-    }
-
-    private func mediaBtn(_ icon: String, _ action: String) -> some View {
-        Button { send(["type": "media", "action": action]) } label: { Image(systemName: icon).font(.title3).frame(width: 40, height: 40) }
-            .buttonStyle(.glass).buttonBorderShape(.circle).tint(Theme.accent)
+        .buttonStyle(.glass).buttonBorderShape(.circle)
     }
 
     private func powerBtn(_ t: String, _ icon: String, _ action: String, safe: Bool = false) -> some View {
         Button {
-            if safe { send(["type": "power", "action": action]) } else { confirm = action; showConfirm = true }
+            if safe { conn.send(["type": "power", "action": action]); Haptics.tap() } else { confirm = action; showConfirm = true }
         } label: {
             VStack(spacing: 6) {
                 Image(systemName: icon).font(.title3)
@@ -184,145 +150,212 @@ struct RemoteControlView: View {
     }
 }
 
-/// Multi-touch trackpad backed by UIKit gesture recognizers.
-struct Trackpad: UIViewRepresentable {
-    var sensitivity: Double
+// MARK: - Remote desktop
 
-    func makeCoordinator() -> Coord { Coord() }
-
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView()
-        v.backgroundColor = .clear
-        v.isMultipleTouchEnabled = true
-        let c = context.coordinator
-        let pan1 = UIPanGestureRecognizer(target: c, action: #selector(Coord.move(_:)))
-        pan1.maximumNumberOfTouches = 1
-        let pan2 = UIPanGestureRecognizer(target: c, action: #selector(Coord.scroll(_:)))
-        pan2.minimumNumberOfTouches = 2
-        let tap1 = UITapGestureRecognizer(target: c, action: #selector(Coord.click(_:)))
-        let tap2 = UITapGestureRecognizer(target: c, action: #selector(Coord.rightClick(_:)))
-        tap2.numberOfTouchesRequired = 2
-        let hold = UILongPressGestureRecognizer(target: c, action: #selector(Coord.drag(_:)))
-        hold.minimumPressDuration = 0.35
-        hold.allowableMovement = 2000
-        [pan1, pan2, tap1, tap2, hold].forEach(v.addGestureRecognizer)
-        tap1.require(toFail: tap2)
-        return v
-    }
-
-    func updateUIView(_ v: UIView, context: Context) { context.coordinator.sensitivity = sensitivity }
-
-    final class Coord: NSObject {
-        var sensitivity = 1.6
-        private var lastHold: CGPoint = .zero
-        private let haptic = UIImpactFeedbackGenerator(style: .light)
-
-        private func send(_ o: [String: Any]) { MainActor.assumeIsolated { Connection.shared.send(o) } }
-
-        @objc func move(_ g: UIPanGestureRecognizer) {
-            let t = g.translation(in: g.view)
-            g.setTranslation(.zero, in: g.view)
-            let v = g.velocity(in: g.view)
-            let speed = hypot(v.x, v.y)
-            let accel = 1 + min(2.2, speed / 900)           // pointer acceleration
-            let k = sensitivity * accel
-            send(["type": "move", "dx": Double(t.x) * k, "dy": Double(t.y) * k])
-        }
-
-        @objc func scroll(_ g: UIPanGestureRecognizer) {
-            let t = g.translation(in: g.view)
-            g.setTranslation(.zero, in: g.view)
-            send(["type": "scroll", "dx": Double(-t.x) / 30, "dy": Double(-t.y) / 18])
-        }
-
-        @objc func click(_ g: UITapGestureRecognizer) { haptic.impactOccurred(); send(["type": "click", "button": "left"]) }
-        @objc func rightClick(_ g: UITapGestureRecognizer) { haptic.impactOccurred(); send(["type": "click", "button": "right"]) }
-
-        @objc func drag(_ g: UILongPressGestureRecognizer) {
-            let p = g.location(in: g.view)
-            switch g.state {
-            case .began:
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                lastHold = p
-                send(["type": "down", "button": "left"])
-            case .changed:
-                let dx = (p.x - lastHold.x) * sensitivity, dy = (p.y - lastHold.y) * sensitivity
-                lastHold = p
-                send(["type": "move", "dx": Double(dx), "dy": Double(dy)])
-            default:
-                send(["type": "up", "button": "left"])
-            }
-        }
-    }
-}
-
-// MARK: - Live screen
-
-struct ScreenView: View {
+/// Live screen with three ways to drive the pointer: touch (tap/drag where you want it), trackpad (relative) and scroll.
+struct RemoteDesktopView: View {
     @EnvironmentObject var conn: Connection
+    @State private var connected = false
     @State private var image: UIImage?
-    @State private var control = true
     @State private var fps = 0.0
     @State private var error: String?
-    @State private var hq = false
+    @State private var mode = 0           // 0 touch, 1 trackpad, 2 scroll
+    @State private var quality = 1
+    @State private var session = 0
+    @State private var seq = 0
+    @State private var shown = 0
+    @State private var frames = 0
+    @State private var since = Date()
+    @State private var last: CGPoint?
+    @State private var lastSent = Date.distantPast
+    @State private var text = " "
+    @FocusState private var typing: Bool
+    @AppStorage("mg.sensitivity") private var sensitivity = 1.6
+
+    private static let presets: [(name: String, w: Int, q: Int)] = [("Fast", 960, 40), ("Balanced", 1280, 55), ("Sharp", 1920, 75)]
+    private static let keys: [[String]] = [["esc", "esc"], ["tab", "tab"], ["↵", "enter"], ["⊞", "win"], ["Alt+Tab", "alt+tab"],
+                                           ["Copy", "ctrl+c"], ["Paste", "ctrl+v"], ["Desktop", "win+d"], ["Close", "alt+f4"]]
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                if let image {
-                    GeometryReader { g in
-                        let fit = fitted(image.size, in: g.size)
-                        Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
-                            .frame(width: g.size.width, height: g.size.height)
-                            .gesture(SpatialTapGesture().onEnded { v in
-                                guard control else { return }
-                                let x = (v.location.x - fit.minX) / fit.width, y = (v.location.y - fit.minY) / fit.height
-                                guard (0...1).contains(x), (0...1).contains(y) else { return }
-                                conn.send(["type": "moveabs", "x": x, "y": y])
-                                conn.send(["type": "click", "button": "left"])
-                                Haptics.tap()
-                            })
-                    }
-                } else {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text(error ?? "Connecting to your screen…").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }
+        ZStack {
+            AppBackground()
+            ScrollView {
+                VStack(spacing: 14) {
+                    screen
+                    if connected { controls } else { connectCard }
                 }
+                .padding(.horizontal, 16).padding(.bottom, 40)
             }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16 / 10, contentMode: .fit)
-            .clipShape(.rect(cornerRadius: 22))
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
-            .padding(.horizontal, 12)
+        }
+        .navigationTitle("Remote desktop")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: "\(connected)-\(session)-\(quality)") {
+            guard connected else { return }
+            async let a: Void = pump(delay: 0)
+            async let b: Void = pump(delay: 45)   // two requests in flight keeps the stream moving while one decodes
+            _ = await (a, b)
+        }
+        .onDisappear { connected = false }
+    }
+
+    private var connectCard: some View {
+        VStack(spacing: 12) {
+            Text(error ?? "Connect to see and control \(conn.pcName.isEmpty ? "your PC" : conn.pcName).").font(.subheadline)
+                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button { error = nil; image = nil; session += 1; connected = true; Haptics.soft() } label: {
+                Label("Connect", systemImage: "play.display").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+            }
+            .buttonStyle(.glassProminent).tint(Theme.accent).foregroundStyle(.white).disabled(conn.state != .online)
+        }
+        .padding(16).glassEffect(.regular, in: .rect(cornerRadius: 26))
+    }
+
+    private var controls: some View {
+        VStack(spacing: 12) {
+            Picker("Mode", selection: $mode) {
+                Image(systemName: "hand.tap").tag(0)
+                Image(systemName: "rectangle.and.hand.point.up.left").tag(1)
+                Image(systemName: "arrow.up.and.down.text.horizontal").tag(2)
+            }
+            .pickerStyle(.segmented)
+            Text(["Touch: tap or drag where you want the pointer", "Trackpad: drag to move, tap to click", "Scroll: drag to scroll"][mode])
+                .font(.caption).foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                small("Left click", "cursorarrow.click") { conn.send(["type": "click", "button": "left"]) }
+                small("Right click", "cursorarrow.click.2") { conn.send(["type": "click", "button": "right"]) }
+                small("Double", "cursorarrow.rays") { conn.send(["type": "click", "button": "left", "double": true]) }
+            }
 
             HStack {
-                Toggle(isOn: $control) { Label("Tap to click", systemImage: "cursorarrow.click.2") }.tint(Theme.violet)
-                Spacer()
-                Toggle(isOn: $hq) { Text("HD") }.tint(Theme.violet).fixedSize()
+                Image(systemName: "keyboard").foregroundStyle(.secondary)
+                TextField("Type on your PC", text: $text).focused($typing)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .onChange(of: text) { old, new in typed(old: old, new: new) }
+                    .onSubmit { conn.send(["type": "key", "key": "enter"]); text = " "; typing = true }
+                if typing { Button("Done") { typing = false }.font(.footnote.weight(.semibold)) }
             }
-            .font(.subheadline.weight(.semibold))
-            .padding(16)
-            .glassEffect(.regular, in: .rect(cornerRadius: 20))
-            .padding(.horizontal, 20)
+            .padding(14).glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
 
-            Text(String(format: "%.0f fps", fps)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .task {
-            var frames = 0
-            var since = Date()
-            while !Task.isCancelled {
-                do {
-                    let d = try await conn.request("/api/screen", query: ["w": hq ? "1920" : "1280", "q": hq ? "70" : "50"])
-                    if let i = UIImage(data: d) { image = i; error = nil }
-                    frames += 1
-                    if Date().timeIntervalSince(since) > 1 { fps = Double(frames) / Date().timeIntervalSince(since); frames = 0; since = Date() }
-                } catch {
-                    self.error = error.localizedDescription
-                    try? await Task.sleep(for: .seconds(1))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Self.keys, id: \.self) { k in
+                        Button(k[0]) { conn.send(["type": "key", "key": k[1]]); Haptics.tap() }
+                            .font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 10)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
                 }
-                try? await Task.sleep(for: .milliseconds(60))
+            }
+            .buttonStyle(.plain)
+
+            HStack {
+                Picker("Quality", selection: $quality) { ForEach(0..<3) { Text(Self.presets[$0].name).tag($0) } }.pickerStyle(.segmented)
+            }
+            HStack {
+                Image(systemName: "speedometer").foregroundStyle(.secondary)
+                Slider(value: $sensitivity, in: 0.6...4)
+                Text(String(format: "%.0f fps", fps)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Button(role: .destructive) { connected = false; Haptics.tap() } label: {
+                Label("Disconnect", systemImage: "xmark.circle").frame(maxWidth: .infinity).padding(.vertical, 4)
+            }
+            .buttonStyle(.glass)
+        }
+        .tint(Theme.accent)
+    }
+
+    private func small(_ t: String, _ icon: String, _ a: @escaping () -> Void) -> some View {
+        Button { a(); Haptics.tap() } label: { Label(t, systemImage: icon).font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 12) }
+            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+    }
+
+    // MARK: screen + gestures
+
+    private var screen: some View {
+        ZStack {
+            if let image {
+                GeometryReader { g in
+                    let fit = fitted(image.size, in: g.size)
+                    Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                        .frame(width: g.size.width, height: g.size.height)
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0)
+                            .onChanged { v in drag(v, fit: fit, imageWidth: image.size.width) }
+                            .onEnded { v in end(v, fit: fit) })
+                }
+            } else {
+                VStack(spacing: 10) {
+                    if connected { ProgressView() } else { Image(systemName: "display").font(.largeTitle).foregroundStyle(.secondary) }
+                    Text(connected ? (error ?? "Connecting to your screen…") : "Not connected").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16 / 10, contentMode: .fit)
+        .clipShape(.rect(cornerRadius: 22))
+        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+    }
+
+    private func drag(_ v: DragGesture.Value, fit: CGRect, imageWidth: CGFloat) {
+        guard connected, Date().timeIntervalSince(lastSent) > 0.02 else { return }
+        lastSent = Date()
+        switch mode {
+        case 0:
+            let x = (v.location.x - fit.minX) / fit.width, y = (v.location.y - fit.minY) / fit.height
+            guard (0...1).contains(x), (0...1).contains(y) else { return }
+            conn.send(["type": "moveabs", "x": x, "y": y])
+        case 1:
+            if let l = last {
+                let k = Double(imageWidth / max(fit.width, 1)) * sensitivity / 1.6
+                conn.send(["type": "move", "dx": Double(v.location.x - l.x) * k, "dy": Double(v.location.y - l.y) * k])
+            }
+            last = v.location
+        default:
+            if let l = last { conn.send(["type": "scroll", "dx": Double(l.x - v.location.x) / 30, "dy": Double(l.y - v.location.y) / 18]) }
+            last = v.location
+        }
+    }
+
+    private func end(_ v: DragGesture.Value, fit: CGRect) {
+        last = nil
+        guard connected, hypot(v.translation.width, v.translation.height) < 8, mode != 2 else { return }
+        if mode == 0 {
+            let x = (v.location.x - fit.minX) / fit.width, y = (v.location.y - fit.minY) / fit.height
+            guard (0...1).contains(x), (0...1).contains(y) else { return }
+            conn.send(["type": "moveabs", "x": x, "y": y])
+        }
+        conn.send(["type": "click", "button": "left"])
+        Haptics.tap()
+    }
+
+    private func typed(old: String, new: String) {
+        if new.count < old.count {
+            for _ in 0..<(old.count - new.count) { conn.send(["type": "key", "key": "backspace"]) }
+        } else if new.count > old.count, new.hasPrefix(old) {
+            conn.send(["type": "text", "text": String(new.dropFirst(old.count))])
+        } else if new != old {
+            conn.send(["type": "text", "text": new.trimmingCharacters(in: .whitespaces)])
+        }
+        if new.isEmpty || new.count > 60 { text = " " }
+    }
+
+    /// Frame loop. Two of these run at once; a frame is shown only if it is newer than the one on screen.
+    @MainActor private func pump(delay: Int) async {
+        let p = Self.presets[quality]
+        try? await Task.sleep(for: .milliseconds(delay))
+        while !Task.isCancelled && connected {
+            seq += 1
+            let mine = seq
+            do {
+                let d = try await conn.request("/api/screen", query: ["w": "\(p.w)", "q": "\(p.q)"])
+                if mine > shown, let img = UIImage(data: d), let ready = await img.byPreparingForDisplay() {
+                    shown = mine; image = ready; error = nil; frames += 1
+                    let dt = Date().timeIntervalSince(since)
+                    if dt > 1 { fps = Double(frames) / dt; frames = 0; since = Date() }
+                }
+            } catch {
+                self.error = error.localizedDescription
+                try? await Task.sleep(for: .seconds(1))
             }
         }
     }
@@ -361,6 +394,11 @@ struct FolderView: View {
 
     var body: some View {
         List {
+            if path.isEmpty {
+                // the nav bar is hidden on this page, so the root gets its own filter field
+                HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Filter", text: $query) }
+                    .listRowBackground(Color.white.opacity(0.04))
+            }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary).listRowBackground(Color.clear)
             }
@@ -372,7 +410,7 @@ struct FolderView: View {
                     Button { open(e) } label: { FileRow(entry: e, busy: busy == e.path) }
                         .listRowBackground(Color.white.opacity(0.04))
                         .swipeActions {
-                            Button { download(e) } label: { Label("Save", systemImage: "square.and.arrow.down") }.tint(Theme.violet)
+                            Button { download(e) } label: { Label("Save", systemImage: "square.and.arrow.down") }.tint(Theme.accent)
                         }
                 }
             }

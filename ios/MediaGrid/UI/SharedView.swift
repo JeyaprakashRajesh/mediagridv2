@@ -18,22 +18,21 @@ struct SharedView: View {
             ZStack {
                 AppBackground()
                 ScrollView {
-                    VStack(spacing: 18) {
+                    VStack(spacing: 16) {
                         HStack {
                             Text("Shared").font(.largeTitle.weight(.bold))
                             Spacer()
                             if store.loading { ProgressView().controlSize(.small) }
                         }
                         .padding(.top, 6)
-                        clipboardCard
-                        actions
-                        history
+                        clipboardRow
+                        sendButtons
+                        historyBox
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 60)
                 }
                 .refreshable { await store.refresh() }
-                .scrollDismissesKeyboard(.interactively)
             }
             .toolbar(.hidden, for: .navigationBar)
             .task { await store.refresh() }
@@ -49,81 +48,76 @@ struct SharedView: View {
         }
     }
 
-    /// Live status of the automatic clipboard, with the latest copied text.
-    private var clipboardCard: some View {
-        let latest = store.items.first { !$0.isFile }
+    /// Universal clipboard switch: no fill, just an outline.
+    private var clipboardRow: some View {
         let online = conn.state == .online
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 14) {
-                Image(systemName: "doc.on.clipboard.fill").font(.title2).foregroundStyle(Theme.onAccent)
-                    .frame(width: 52, height: 52).background(Theme.accent, in: .rect(cornerRadius: 16))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Universal Clipboard").font(.headline)
-                    HStack(spacing: 6) {
-                        Circle().fill(clip.auto && online ? Theme.accent : Color.gray).frame(width: 8, height: 8)
-                        Text(!clip.auto ? "Paused" : online ? "In sync with \(conn.pcName)" : "Waiting for your PC…")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Toggle("", isOn: $clip.auto).labelsHidden().tint(Theme.accent)
+        return HStack(spacing: 12) {
+            Image(systemName: "doc.on.clipboard").font(.title3).foregroundStyle(Theme.accent).frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Universal clipboard").font(.subheadline.weight(.semibold))
+                Text(!clip.auto ? "Paused" : online ? "In sync with \(conn.pcName)" : "Waiting for your PC…")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            if let latest, let t = latest.text {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("LATEST").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-                    Text(t).font(.subheadline).lineLimit(3)
-                    Label("\(latest.from == "pc" ? "From PC" : "From iPhone") · \(latest.date.relative)",
-                          systemImage: latest.from == "pc" ? "desktopcomputer" : "iphone")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 16))
-            }
-            Text("Copy on either device and it's ready to paste on the other. On iPhone this works while MediaGrid is open.")
-                .font(.caption).foregroundStyle(.tertiary)
+            Spacer()
+            Toggle("", isOn: $clip.auto).labelsHidden().tint(Theme.accent)
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 28))
+        .padding(14)
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.secondary.opacity(0.3), lineWidth: 1))
     }
 
-    private var actions: some View {
+    private var sendButtons: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 30, matching: .any(of: [.images, .videos])) {
-                    actionLabel("Photos", "photo.on.rectangle", Theme.pink)
+                    sendLabel("Send photos") {
+                        Image(systemName: "photo.on.rectangle.angled").font(.system(size: 28))
+                            .foregroundStyle(LinearGradient(colors: [.orange, .pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    }
                 }
-                Button { importing = true } label: { actionLabel("Files", "folder.fill", Theme.cyan) }
+                Button { importing = true } label: {
+                    sendLabel("Send files") {
+                        Image(systemName: "folder.fill").font(.system(size: 28)).foregroundStyle(Color(hex: 0x3B8EF0))
+                    }
+                }
             }
         }
         .buttonStyle(.plain)
-        .overlay {
-            if sending { ProgressView().padding().glassEffect(.regular, in: .circle) }
-        }
+        .overlay { if sending { ProgressView().padding().glassEffect(.regular, in: .circle) } }
     }
 
-    private func actionLabel(_ t: String, _ icon: String, _ c: Color) -> some View {
+    private func sendLabel<I: View>(_ t: String, @ViewBuilder icon: () -> I) -> some View {
         VStack(spacing: 8) {
-            IconBadge(symbol: icon, color: c, size: 40)
-            Text("Send \(t)").font(.footnote.weight(.semibold))
+            icon()
+            Text(t).font(.footnote.weight(.semibold))
         }
         .frame(maxWidth: .infinity).padding(.vertical, 18)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24))
     }
 
-    private var history: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("History").font(.title3.weight(.bold))
-            if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
-            if store.items.isEmpty {
-                Text("Things you copy or send between your PC and iPhone show up here.")
-                    .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 30).frame(maxWidth: .infinity)
+    /// One big container; each of the latest 20 items sits in its own container inside it.
+    private var historyBox: some View {
+        let items = Array(store.items.prefix(20))
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("History").font(.headline)
+                Spacer()
+                Text("\(items.count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
-            ForEach(store.items) { item in
+            .padding(.horizontal, 6)
+            if let error { Text(error).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 6) }
+            if items.isEmpty {
+                Text("Things you copy or send between your PC and iPhone show up here.")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, minHeight: 300)
+            }
+            ForEach(items) { item in
                 SharedRow(item: item) { open(item) }
-                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(duration: 0.4), value: store.items.map(\.id))
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 440, alignment: .top)
+        .glassEffect(.regular, in: .rect(cornerRadius: 30))
+        .animation(.spring(duration: 0.4), value: items.map(\.id))
     }
 
     private func open(_ i: SharedItem) {
@@ -170,29 +164,26 @@ struct SharedRow: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: item.isFile ? "doc.fill" : item.kind == "clipboard" ? "doc.on.clipboard" : "text.quote")
-                    .font(.headline)
-                    .foregroundStyle(item.isFile ? Theme.cyan : Theme.violet)
-                    .frame(width: 38, height: 38)
-                    .background((item.isFile ? Theme.cyan : Theme.violet).opacity(0.16), in: .rect(cornerRadius: 11))
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 12) {
+                IconBadge(symbol: item.isFile ? "doc.fill" : "doc.on.clipboard", color: item.isFile ? Theme.cyan : Theme.accent, size: 36)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(item.isFile ? (item.name ?? "File") : (item.text ?? ""))
-                        .font(.subheadline).lineLimit(4).multilineTextAlignment(.leading)
-                    HStack(spacing: 6) {
+                        .font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
+                    HStack(spacing: 5) {
                         Image(systemName: item.from == "pc" ? "desktopcomputer" : "iphone")
-                        Text(item.from == "pc" ? "PC" : item.from)
-                        Text("·")
-                        Text(item.date.relative)
+                        Text(item.from == "pc" ? "PC" : "iPhone")
+                        Text("· \(item.date.relative)")
                         if let s = item.size { Text("· \(s.byteString)") }
                     }
                     .font(.caption2).foregroundStyle(.secondary)
                 }
-                Spacer()
+                Spacer(minLength: 4)
                 Image(systemName: item.isFile ? "eye" : "doc.on.doc").font(.footnote).foregroundStyle(.secondary)
             }
-            .padding(12)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 18))
+            .contentShape(.rect(cornerRadius: 18))
         }
         .buttonStyle(.plain)
         .contextMenu {

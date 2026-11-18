@@ -17,6 +17,8 @@ pub enum Cmd {
     Text { text: String },
     Media { action: String },
     Power { action: String },
+    /// Essential PC controls: volstep (value = key presses, +/-), brightness (0-100), wifi / bluetooth (1 = on).
+    Sys { action: String, #[serde(default)] value: f64 },
 }
 
 static TX: Lazy<Sender<Cmd>> = Lazy::new(|| {
@@ -66,6 +68,7 @@ static TX: Lazy<Sender<Cmd>> = Lazy::new(|| {
                 Cmd::Text { text } => { let _ = en.text(&text); }
                 Cmd::Media { action } => media(&mut en, &action),
                 Cmd::Power { action } => power(&action),
+                Cmd::Sys { action, value } => sys(&mut en, &action, value),
             }
         }
     });
@@ -138,6 +141,42 @@ fn media(en: &mut Enigo, a: &str) {
 
 #[cfg(not(target_os = "windows"))]
 fn media(_en: &mut Enigo, _a: &str) {}
+
+#[cfg(target_os = "windows")]
+fn sys(en: &mut Enigo, a: &str, v: f64) {
+    use std::os::windows::process::CommandExt;
+    const NO_WINDOW: u32 = 0x0800_0000;
+    let on = v >= 0.5;
+    let script = match a {
+        "volstep" => {
+            let n = v.round() as i32;
+            let k = if n >= 0 { Key::VolumeUp } else { Key::VolumeDown };
+            for _ in 0..n.abs().min(50) { let _ = en.key(k, Direction::Click); }
+            return;
+        }
+        "brightness" => format!("(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{})", v.clamp(0.0, 100.0) as i32),
+        // needs the PC app to run as administrator; fails quietly otherwise
+        "wifi" => format!("netsh interface set interface name=\"Wi-Fi\" admin={}", if on { "enabled" } else { "disabled" }),
+        "bluetooth" => format!(
+            "Add-Type -AssemblyName System.Runtime.WindowsRuntime; \
+             $t=([System.WindowsRuntimeSystemExtensions].GetMethods()|?{{$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'}})[0]; \
+             function Aw($x,$r){{$n=$t.MakeGenericMethod($r).Invoke($null,@($x));$n.Wait(-1)|Out-Null;$n.Result}}; \
+             [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]|Out-Null; \
+             [Windows.Devices.Radios.RadioAccessStatus,Windows.System.Devices,ContentType=WindowsRuntime]|Out-Null; \
+             Aw ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])|Out-Null; \
+             $r=Aw ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]); \
+             $b=$r|?{{$_.Kind -eq 'Bluetooth'}}; \
+             [Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime]|Out-Null; \
+             Aw ($b.SetStateAsync('{}')) ([Windows.Devices.Radios.RadioAccessStatus])|Out-Null",
+            if on { "On" } else { "Off" }
+        ),
+        _ => return,
+    };
+    let _ = std::process::Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]).creation_flags(NO_WINDOW).spawn();
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sys(_en: &mut Enigo, _a: &str, _v: f64) {}
 
 fn power(a: &str) {
     #[cfg(target_os = "windows")]

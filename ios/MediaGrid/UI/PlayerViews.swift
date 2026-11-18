@@ -6,6 +6,7 @@ struct MiniPlayer: View {
     @EnvironmentObject var player: Player
     @EnvironmentObject var music: MusicStore
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @ObservedObject private var tint = TintStore.shared
     var open: () -> Void
 
     var body: some View {
@@ -43,7 +44,7 @@ struct MiniPlayer: View {
                     Image(systemName: "play.fill").font(.title3).frame(width: 34, height: 34)
                 }
             } else {
-                Image(systemName: "music.note").foregroundStyle(Theme.accent)
+                Image(systemName: "music.note").foregroundStyle(tint.color)
                 Text(music.tracks.isEmpty ? "Connect your PC to stream music" : "Pick a song to start")
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
@@ -66,6 +67,7 @@ struct NowPlayingView: View {
     @State private var showQueue = false
     @State private var downloading = false
     @ObservedObject private var ui = UIState.shared
+    @ObservedObject private var tint = TintStore.shared
 
     private var goTarget: SongCollection? {
         guard let id = player.collectionID, let c = music.collection(id: id) else { return nil }
@@ -138,17 +140,17 @@ struct NowPlayingView: View {
             // transport
             HStack {
                 Button { player.shuffle.toggle(); Haptics.tap() } label: {
-                    Image(systemName: "shuffle").font(.title3).foregroundStyle(player.shuffle ? Theme.accent : .white.opacity(0.7))
+                    Image(systemName: "shuffle").font(.title3).foregroundStyle(player.shuffle ? tint.color : .white.opacity(0.7))
                 }
                 Spacer()
                 Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 28)) }
                 Spacer()
                 Button { player.toggle(); Haptics.soft() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 32)).frame(width: 74, height: 74)
+                        .font(.system(size: 22)).frame(width: 54, height: 54)
                         .contentTransition(.symbolEffect(.replace))
                 }
-                .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.accentColor).foregroundStyle(.white)
+                .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(tint.color).foregroundStyle(.white)
                 Spacer()
                 Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 28)) }
                 Spacer()
@@ -157,7 +159,7 @@ struct NowPlayingView: View {
                     Haptics.tap()
                 } label: {
                     Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
-                        .font(.title3).foregroundStyle(player.repeatMode == .off ? .white.opacity(0.7) : Theme.accent)
+                        .font(.title3).foregroundStyle(player.repeatMode == .off ? .white.opacity(0.7) : tint.color)
                 }
             }
 
@@ -191,11 +193,9 @@ struct NowPlayingView: View {
         .padding(.top, 8).padding(.bottom, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            // Colour comes from the song's artwork. It is a background so its oversize blur can't widen the layout.
-            Color.black
-                .overlay { ArtworkView(track: t, size: 600, radius: 0).blur(radius: 80).scaleEffect(1.6).opacity(0.75) }
-                .overlay { LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom) }
-                .clipped()
+            // Colour of the song, easing between tracks; a static black fade on top keeps text readable.
+            tint.color
+                .overlay { LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom) }
                 .ignoresSafeArea()
         }
         .environment(\.colorScheme, .dark)

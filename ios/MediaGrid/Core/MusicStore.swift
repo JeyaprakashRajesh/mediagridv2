@@ -301,16 +301,16 @@ final class MusicStore: ObservableObject {
         let likedT = tracks.filter { liked.contains($0.id) }
         if !likedT.isEmpty {
             out.append(SmartMix(id: "liked", title: "Liked Songs", subtitle: "\(likedT.count) songs", symbol: "heart.fill",
-                                colors: [Color(hex: 0xD6336C)], tracks: likedT))
+                                colors: [Color(hex: 0xC72E66)], tracks: likedT))
         }
         let recent = tracks.sorted { $0.added > $1.added }.prefix(60)
         out.append(SmartMix(id: "recent", title: "Recently Added", subtitle: "Fresh in your library", symbol: "sparkles",
-                            colors: [Color(hex: 0x2563EB)], tracks: Array(recent)))
+                            colors: [Color(hex: 0xC8601A)], tracks: Array(recent)))
 
         let played = tracks.filter { (playCounts[$0.id] ?? 0) > 0 }.sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
         if played.count >= 5 {
             out.append(SmartMix(id: "repeat", title: "On Repeat", subtitle: "Songs you can't stop playing", symbol: "repeat",
-                                colors: [Color(hex: 0x8B5CF6)], tracks: Array(played.prefix(50))))
+                                colors: [Color(hex: 0x0E8077)], tracks: Array(played.prefix(50))))
         }
 
         // Daily mixes: built around your most played (or biggest) artists
@@ -318,7 +318,7 @@ final class MusicStore: ObservableObject {
             ts.reduce(0) { $0 + (playCounts[$1.id] ?? 0) * 3 + (liked.contains($1.id) ? 5 : 0) } + ts.count
         }
         let topArtists = artistScore.sorted { $0.value > $1.value }.map(\.key).filter { $0 != "Unknown Artist" }
-        let palettes: [[Color]] = [[Color(hex: 0x7C3AED)], [Color(hex: 0x0D9488)], [Color(hex: 0xEA580C)], [Color(hex: 0xDB2777)]]
+        let palettes: [[Color]] = [[Color(hex: 0x7345C9)], [Color(hex: 0x2F8F5B)], [Color(hex: 0xB4541E)], [Color(hex: 0x9A3F9A)]]
         var used = Set<String>()
         var mixNo = 1
         for (i, a) in topArtists.enumerated() where mixNo <= 4 && !used.contains(a) {
@@ -336,22 +336,22 @@ final class MusicStore: ObservableObject {
         let rediscover = tracks.filter { (playCounts[$0.id] ?? 0) == 0 }.shuffled(using: &rng).prefix(40)
         if rediscover.count >= 5 {
             out.append(SmartMix(id: "discover", title: "Discover Weekly", subtitle: "Songs you haven't played yet", symbol: "safari",
-                                colors: [Color(hex: 0x0891B2)], tracks: Array(rediscover)))
+                                colors: [Color(hex: 0x5D7F2E)], tracks: Array(rediscover)))
         }
         let offline = tracks.filter { downloaded.contains($0.id) }
         if !offline.isEmpty {
             out.append(SmartMix(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill",
-                                colors: [Color(hex: 0x16A34A)], tracks: offline))
+                                colors: [Color(hex: 0x2F8F5B)], tracks: offline))
         }
         let long = tracks.filter { $0.duration > 270 }.shuffled(using: &rng).prefix(50)
         if long.count >= 5 {
             out.append(SmartMix(id: "drive", title: "Long Drive", subtitle: "Settle in", symbol: "car.fill",
-                                colors: [Color(hex: 0xB45309)], tracks: Array(long)))
+                                colors: [Color(hex: 0x9A5A17)], tracks: Array(long)))
         }
         let quick = tracks.filter { $0.duration > 0 && $0.duration < 200 }.shuffled(using: &rng).prefix(50)
         if quick.count >= 5 {
             out.append(SmartMix(id: "quick", title: "Quick Hits", subtitle: "Short & sweet", symbol: "bolt.fill",
-                                colors: [Color(hex: 0xE11D48)], tracks: Array(quick)))
+                                colors: [Color(hex: 0xB02A4E)], tracks: Array(quick)))
         }
         return out
     }

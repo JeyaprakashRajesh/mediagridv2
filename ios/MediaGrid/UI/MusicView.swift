@@ -29,7 +29,7 @@ struct MusicView: View {
     @EnvironmentObject var conn: Connection
     @ObservedObject private var ui = UIState.shared
     @FocusState private var searchFocused: Bool
-    @State private var coverTint: Color?
+    @ObservedObject private var tint = TintStore.shared
     @State private var search = ""
     @State private var newPlaylist = false
     @State private var playlistName = ""
@@ -63,6 +63,7 @@ struct MusicView: View {
             }
             .navigationDestination(for: SongCollection.self) { CollectionView(collection: $0) }
             .refreshable { await music.refresh() }
+            .tint(tint.color)
             .alert("New Playlist", isPresented: $newPlaylist) {
                 TextField("Playlist name", text: $playlistName)
                 Button("Create") { if !playlistName.isEmpty { music.createPlaylist(playlistName) }; playlistName = "" }
@@ -71,20 +72,15 @@ struct MusicView: View {
         }
     }
 
-    /// Soft gradient at the top of the Music screen, coloured by the cover of the song playing (or last played).
-    @ViewBuilder private var recentGlow: some View {
-        if let t = player.current ?? music.recentlyPlayed.first?.track {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: 380)
-                    .overlay { ArtworkView(track: t, size: 500, radius: 0).blur(radius: 70).scaleEffect(1.5).opacity(0.55) }
-                    .clipped()
-                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
-                Spacer()
-            }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-            .animation(.smooth, value: t.id)
+    /// Soft wash at the top of the Music screen in the colour of the song playing (eases between songs).
+    private var recentGlow: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(tint.color.opacity(0.5)).frame(height: 360)
+                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
+            Spacer()
         }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 
     /// Greeting on the left; sync + shuffle on the right of the same row.
@@ -171,7 +167,7 @@ struct MusicView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: music.loading ? "arrow.triangle.2.circlepath" : "music.note.house.fill")
-                .font(.system(size: 54)).foregroundStyle(Theme.brand)
+                .font(.system(size: 54)).foregroundStyle(tint.color)
                 .symbolEffect(.rotate, isActive: music.loading)
             Text(music.loading ? "Loading your library…" : "No music yet").font(.title3.weight(.bold))
             Text(music.lastError ?? "Add your music folders in MediaGrid on your PC (Settings), and they'll show up here.")
@@ -191,7 +187,7 @@ struct MusicView: View {
                 if music.syncing {
                     Circle().stroke(.secondary.opacity(0.3), lineWidth: 2.5)
                     Circle().trim(from: 0, to: Double(music.syncDone) / Double(max(music.syncTotal, 1)))
-                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round)).rotationEffect(.degrees(-90))
+                        .stroke(tint.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round)).rotationEffect(.degrees(-90))
                         .animation(.smooth, value: music.syncDone)
                     Image(systemName: "xmark").font(.caption2.weight(.bold))
                 } else {
@@ -234,22 +230,21 @@ struct MusicView: View {
                         Haptics.tap()
                     } label: {
                         Image(systemName: isCurrent && player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title2).foregroundStyle(Theme.onAccent)
+                            .font(.title3).foregroundStyle(.white)
                             .contentTransition(.symbolEffect(.replace))
-                            .frame(width: 58, height: 58)
-                            .background(Theme.accent, in: .circle)
+                            .frame(width: 48, height: 48)
+                            .background(tint.color, in: .circle)
                     }
                     .buttonStyle(.plain)
                 }
                 .padding(14)
-                .glassEffect((coverTint.map { Glass.regular.tint($0.opacity(0.4)) } ?? Glass.regular).interactive(), in: .rect(cornerRadius: 30))
+                .glassEffect(Glass.regular.tint(tint.color.opacity(0.4)).interactive(), in: .rect(cornerRadius: 30))
                 .contentShape(.rect(cornerRadius: 30))
                 .onTapGesture {
                     if !isCurrent { player.playRecent(item.track, in: list, pos: item.pos) }
                     ui.openPlayer()
                 }
                 .padding(.horizontal, 20)
-                .task(id: item.track.id) { coverTint = await ArtColors.shared.color(for: item.track) }
             }
         }
     }
@@ -278,8 +273,8 @@ struct MusicView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 ZStack {
                                     if ts.isEmpty {
-                                        Theme.accent.opacity(0.15)
-                                        Image(systemName: "music.note.list").font(.system(size: 44)).foregroundStyle(Theme.accent)
+                                        Theme.pick(p.name).opacity(0.25)
+                                        Image(systemName: "music.note.list").font(.system(size: 44)).foregroundStyle(Theme.pick(p.name))
                                     } else {
                                         CoverGrid(tracks: Array(ts.prefix(4)), size: 170)
                                     }
@@ -412,6 +407,7 @@ struct CoverGrid: View {
 
 struct CollectionView: View {
     let collection: SongCollection
+    @ObservedObject private var tint = TintStore.shared
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var player: Player
     @Environment(\.dismiss) private var dismiss
@@ -435,8 +431,8 @@ struct CollectionView: View {
                     if collection.playlist != nil {
                         if ts.isEmpty {
                             ZStack {
-                                Theme.accent.opacity(0.18)
-                                Image(systemName: "music.note.list").font(.system(size: 70)).foregroundStyle(Theme.accent)
+                                collection.colors.first?.opacity(0.25) ?? Theme.accent.opacity(0.25)
+                                Image(systemName: "music.note.list").font(.system(size: 70)).foregroundStyle(collection.colors.first ?? Theme.accent)
                             }
                             .frame(width: 250, height: 250).clipShape(.rect(cornerRadius: 32))
                         } else {
@@ -470,7 +466,7 @@ struct CollectionView: View {
                                 .contentTransition(.symbolEffect(.replace))
                                 .frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
-                        .buttonStyle(.glassProminent).tint(Theme.accent).foregroundStyle(Theme.onAccent)
+                        .buttonStyle(.glassProminent).tint(tint.color).foregroundStyle(.white)
                         Button { player.play(ts, shuffle: true, source: collection.title, collectionID: collection.id); Haptics.soft() } label: {
                             Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
@@ -498,6 +494,7 @@ struct CollectionView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.ink.ignoresSafeArea())
+        .tint(tint.color)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if collection.playlist == nil {
@@ -543,7 +540,7 @@ struct TrackRow: View {
     let onTap: () -> Void
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var player: Player
-    @State private var tint: Color?
+    @ObservedObject private var tint = TintStore.shared
 
     var body: some View {
         let isCurrent = player.current?.id == track.id
@@ -552,7 +549,7 @@ struct TrackRow: View {
                 ArtworkView(track: track, size: 48, radius: 10)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title).font(.body.weight(.semibold)).lineLimit(1)
-                        .foregroundStyle(isCurrent ? Theme.violet : .primary)
+                        .foregroundStyle(isCurrent ? tint.color : .primary)
                     HStack(spacing: 5) {
                         if music.isDownloaded(track) {
                             Image(systemName: "arrow.down.circle.fill").font(.caption2).foregroundStyle(Theme.mint)
@@ -571,11 +568,10 @@ struct TrackRow: View {
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(isCurrent ? (tint ?? Theme.accent).opacity(0.28) : .clear, in: .rect(cornerRadius: 14))
+            .background(isCurrent ? tint.color.opacity(0.28) : .clear, in: .rect(cornerRadius: 14))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .task(id: isCurrent) { if isCurrent { tint = await ArtColors.shared.color(for: track) } }
         .contextMenu { menuItems }
     }
 
@@ -604,13 +600,13 @@ struct TrackRow: View {
 extension MusicStore {
     /// Rebuild a playlist / mix / album page from its id (used by "Go to playlist").
     func collection(id: String) -> SongCollection? {
-        let grey = [Color(hex: 0x4F46E5)]
+        let grey = [Color(hex: 0x7345C9)]
         if id == "all" {
             return SongCollection(id: "all", title: "All Songs", subtitle: "\(tracks.count) songs", symbol: "music.note.list", colors: grey, tracks: tracks)
         }
         if id == "offline" {
             let ts = tracks.filter { downloaded.contains($0.id) }
-            return SongCollection(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill", colors: [Color(hex: 0x16A34A)], tracks: ts)
+            return SongCollection(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill", colors: [Color(hex: 0x2F8F5B)], tracks: ts)
         }
         if id.hasPrefix("pl-"), let p = playlists.first(where: { "pl-\($0.id)" == id }) {
             let ts = tracks(for: p)

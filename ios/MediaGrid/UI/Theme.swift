@@ -3,16 +3,17 @@ import SwiftUI
 /// Monochrome theme: black & white only. The "accent" is white on dark and black on light,
 /// so everything adapts to the system appearance. Colour only ever comes from cover art.
 enum Theme {
-    /// Follows the song that's playing (set on the root view via `.tint`), so it adapts in any view.
-    static var accent: Color { .accentColor }
+    /// One primary for every page except Music: readable on both light and dark surfaces, white text on it passes contrast.
+    static let accent = Color(hex: 0x6D5DFB)
     static let onAccent = Color.white
-    static var violet: Color { .accentColor }
-    static var brand: Color { .accentColor }
-    static let cyan = Color(hex: 0x22B8CF)
-    static let pink = Color(hex: 0xFF5C8A)
-    static let mint = Color(hex: 0x34D399)
+    static var violet: Color { accent }
+    static var brand: Color { accent }
+    static let cyan = Color(hex: 0x14A39A)
+    static let pink = Color(hex: 0xF0568A)
+    static let mint = Color(hex: 0x2FB67C)
     static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.05, alpha: 1) : UIColor(white: 0.96, alpha: 1) })
-    static let palettes: [[Color]] = [(0x6D28D9, 0x2563EB), (0xDB2777, 0xF97316), (0x0D9488, 0x2563EB), (0xEA580C, 0xDB2777), (0x16A34A, 0x0891B2), (0x7C3AED, 0xDB2777)]
+    /// Toned-down (no blue) gradient pairs for covers without art.
+    static let palettes: [[Color]] = [(0x7345C9, 0xB5295F), (0xB5295F, 0xC8601A), (0x0E8077, 0x2F8F5B), (0xC8601A, 0xB5295F), (0x2F8F5B, 0x0E8077), (0x7345C9, 0x9A3F9A)]
         .map { [Color(hex: $0.0), Color(hex: $0.1)] }
     /// Stable colour for a name (playlists, albums, artists).
     static func pick(_ s: String) -> Color {
@@ -21,19 +22,21 @@ enum Theme {
     }
 }
 
-/// Colour of the song that's playing (vibrant version of its cover's average); drives buttons and highlights app-wide.
+/// Colour of the song that's playing (vibrant, slightly darkened). Only the Music page and player use it;
+/// it eases from one song's colour to the next.
 @MainActor final class TintStore: ObservableObject {
     static let shared = TintStore()
-    static let base = Color(hex: 0x7C5CFF)
+    static let base = Color(hex: 0x6D5DFB)
     @Published var color = TintStore.base
 
     func update(for t: Track?) async {
-        guard let t, let c = await ArtColors.shared.color(for: t) else { color = Self.base; return }
-        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(c).getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        withAnimation(.easeInOut(duration: 0.6)) {
-            color = s < 0.12 ? Self.base : Color(hue: h, saturation: max(s, 0.55), brightness: min(max(b, 0.7), 0.95))
+        var target = Self.base
+        if let t, let u = await ArtColors.shared.vibrant(for: t) {
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            u.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            target = Color(hue: h, saturation: min(max(s, 0.5), 0.85), brightness: min(max(b, 0.5), 0.76))
         }
+        withAnimation(.easeInOut(duration: 1.0)) { color = target }
     }
 }
 

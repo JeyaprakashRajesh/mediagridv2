@@ -40,11 +40,11 @@ struct RootView: View {
     private var tabs: some View {
         // Icons only: every tab is recognisable from its symbol (names stay for VoiceOver).
         TabView(selection: $ui.tab) {
-            Tab(value: AppTab.music) { MusicView().tint(tint.color) } label: { Image("TabMusic").accessibilityLabel("Music") }
-            Tab(value: AppTab.media) { MediaView().tint(tint.color) } label: { Image("TabMedia").accessibilityLabel("Media") }
-            Tab(value: AppTab.shared) { SharedView().tint(tint.color) } label: { Image("TabShared").accessibilityLabel("Shared") }
-            Tab(value: AppTab.pc) { PCView().tint(tint.color) } label: { Image("TabPC").accessibilityLabel("PC") }
-            Tab(value: AppTab.profile) { ProfileView().tint(tint.color) } label: { Image("TabProfile").accessibilityLabel("Profile") }
+            Tab(value: AppTab.music) { MusicView() } label: { Image("TabMusic").accessibilityLabel("Music") }
+            Tab(value: AppTab.media) { MediaView().tint(Theme.accent) } label: { Image("TabMedia").accessibilityLabel("Media") }
+            Tab(value: AppTab.shared) { SharedView().tint(Theme.accent) } label: { Image("TabShared").accessibilityLabel("Shared") }
+            Tab(value: AppTab.pc) { PCView().tint(Theme.accent) } label: { Image("TabPC").accessibilityLabel("PC") }
+            Tab(value: AppTab.profile) { ProfileView().tint(Theme.accent) } label: { Image("TabProfile").accessibilityLabel("Profile") }
         }
         .tint(Color(UIColor { $0.userInterfaceStyle == .dark ? .white : .black }))   // active tab: white (black in light), others grey
         .environment(\.symbolVariants, .none)   // outline icons only, never filled
@@ -61,7 +61,7 @@ struct RootView: View {
                     .zIndex(1)
             }
         }
-        .task(id: player.current?.id) { await tint.update(for: player.current) }
+        .task(id: player.current?.id ?? music.recentlyPlayed.first?.track.id) { await tint.update(for: player.current ?? music.recentlyPlayed.first?.track) }
         .task {
             await music.refresh()
             await media.refresh()
