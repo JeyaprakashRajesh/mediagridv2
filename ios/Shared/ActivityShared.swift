@@ -10,7 +10,7 @@ struct MediaGridActivity: ActivityAttributes {
         var done: Int = 0
         var total: Int = 0
         var finished: Bool = false
-        var accent: [Double] = [0.10, 0.45, 0.91]   // r, g, b of the app accent colour
+        var accent: [Double] = [0.71, 0.47, 0.10]   // r, g, b of the app accent colour
     }
     var pcName: String
 }

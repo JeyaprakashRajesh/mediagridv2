@@ -4,22 +4,22 @@ import SwiftUI
 /// Liquid Glass for controls. Legacy names (violet, cyan, pink, mint) now map to the accent / standard colours.
 enum Theme {
     static let accents: [(id: String, name: String, color: Color)] = [
-        ("blue", "Blue", Color(hex: 0x1A73E8)), ("green", "Green", Color(hex: 0x1E8E3E)),
-        ("red", "Red", Color(hex: 0xD93025)), ("amber", "Amber", Color(hex: 0xE37400)),
-        ("teal", "Teal", Color(hex: 0x00897B)), ("sapphire", "Sapphire", Color(hex: 0x3F51B5)),
-        ("gold", "Gold", Color(hex: 0xB8860B)), ("graphite", "Graphite", Color(hex: 0x5F6368)),
+        ("gold", "Gold", Color(hex: 0xB5791A)), ("emerald", "Emerald", Color(hex: 0x1F9D6B)),
+        ("ruby", "Ruby", Color(hex: 0xC2334D)), ("sapphire", "Sapphire", Color(hex: 0x2F6FDE)),
+        ("teal", "Teal", Color(hex: 0x138A8A)), ("amber", "Amber", Color(hex: 0xD9791C)),
+        ("slate", "Slate", Color(hex: 0x64748B)), ("bronze", "Bronze", Color(hex: 0x8A5A3C)),
     ]
     static var accent: Color {
-        let id = UserDefaults.standard.string(forKey: "mg.accent") ?? "blue"
+        let id = UserDefaults.standard.string(forKey: "mg.accent") ?? "gold"
         return (accents.first { $0.id == id } ?? accents[0]).color
     }
     static var violet: Color { accent }
     static var cyan: Color { accent }
-    static var pink: Color { Color(hex: 0xD93025) }   // likes / destructive
-    static let mint = Color(hex: 0x1E8E3E)            // success / downloaded
+    static var pink: Color { Color(hex: 0xE5484D) }   // likes / destructive
+    static let mint = Color(hex: 0x2FB67C)            // success / downloaded
     /// Flat surface that follows the system light / dark setting.
-    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.105, green: 0.11, blue: 0.118, alpha: 1)
-                                                                   : UIColor(red: 0.945, green: 0.953, blue: 0.957, alpha: 1) })
+    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.055, green: 0.059, blue: 0.071, alpha: 1)   // #0E0F12
+                                                                   : UIColor(red: 0.965, green: 0.957, blue: 0.937, alpha: 1) })  // #F6F4EF
     static var brand: Color { accent }
     static let palettes: [[Color]] = accents.map { [$0.color] }
 }

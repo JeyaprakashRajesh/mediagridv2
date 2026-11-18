@@ -13,11 +13,12 @@ struct MediaGridApp: App {
     @StateObject private var coord = Coordinator.shared
     @StateObject private var shared = SharedStore.shared
     @AppStorage("mg.appearance") private var appearance = 0   // 0 system, 1 light, 2 dark
-    @AppStorage("mg.accent") private var accent = "blue"
+    @AppStorage("mg.accent") private var accent = "gold"
 
     init() {
         PhotoSync.registerBackground()
         Coordinator.shared.start()
+        CallMonitor.shared.start()
         _ = Player.shared
     }
 
@@ -39,6 +40,7 @@ struct MediaGridApp: App {
             switch p {
             case .active:
                 conn.startDiscovery()
+                clip.startWatching()
                 conn.resume()
                 photos.startObserving()
                 Task {
@@ -47,6 +49,7 @@ struct MediaGridApp: App {
                     if photos.auto { await photos.syncNow() }
                 }
             case .background:
+                clip.stopWatching()
                 PhotoSync.scheduleBackground()
             default: break
             }

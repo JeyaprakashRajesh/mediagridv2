@@ -9,7 +9,7 @@ struct ProfileView: View {
     @EnvironmentObject var player: Player
     @AppStorage("mg.liveActivity") private var liveActivity = true
     @AppStorage("mg.appearance") private var appearance = 0
-    @AppStorage("mg.accent") private var accent = "blue"
+    @AppStorage("mg.accent") private var accent = "gold"
     @State private var editingHost = false
     @State private var newHost = ""
     @State private var confirmSignOut = false

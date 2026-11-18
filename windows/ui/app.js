@@ -46,12 +46,12 @@ const ICON = {
 };
 
 /* ---------------- appearance: system light/dark + accent ---------------- */
-const ACCENTS = [["blue", "Blue", "#1a73e8", "#8ab4f8"], ["green", "Green", "#1e8e3e", "#81c995"], ["red", "Red", "#d93025", "#f28b82"], ["amber", "Amber", "#e37400", "#fdd663"],
-  ["teal", "Teal", "#00897b", "#78d9ca"], ["sapphire", "Sapphire", "#3f51b5", "#9fa8da"], ["gold", "Gold", "#b8860b", "#e6c35c"], ["graphite", "Graphite", "#5f6368", "#bdc1c6"]];
+const ACCENTS = [["gold", "Gold", "#b5791a", "#e0b05a"], ["emerald", "Emerald", "#1f9d6b", "#5fd3a1"], ["ruby", "Ruby", "#c2334d", "#ef7b90"], ["sapphire", "Sapphire", "#2f6fde", "#8fb4f5"],
+  ["teal", "Teal", "#138a8a", "#6fd0d0"], ["amber", "Amber", "#d9791c", "#f5b66b"], ["slate", "Slate", "#64748b", "#b0bccd"], ["bronze", "Bronze", "#8a5a3c", "#d2a888"]];
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 function applyTheme() {
-  const mode = store.get("mg.theme", "system"), acc = ACCENTS.find((a) => a[0] === store.get("mg.accent", "blue")) || ACCENTS[0];
+  const mode = store.get("mg.theme", "system"), acc = ACCENTS.find((a) => a[0] === store.get("mg.accent", "gold")) || ACCENTS[0];
   const root = document.documentElement;
   root.dataset.theme = mode === "system" ? (darkQuery.matches ? "dark" : "light") : mode;
   root.style.setProperty("--accent", acc[2]);
@@ -75,6 +75,7 @@ $("#w-close").onclick = () => win.hide();
 function showTab(name) {
   $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
+  $("#music-glow").style.display = name === "music" ? "block" : "none";
   if (name === "media" && !media.length) loadMedia();
   if (name === "mobile") loadDevices();
   if (name === "shared") loadShared();
@@ -89,7 +90,7 @@ $("#greeting").textContent = greet();
 /* shared with the iPhone through the PC server: /api/playback */
 const DEVICE = "PC";
 let playback = { recent: [], now: null };
-const getRecent = () => (playback.recent || []).slice(0, 8);
+const getRecent = () => (playback.recent || []).slice(0, 1); // only the last song
 async function loadPlayback() { try { playback = await api("/api/playback"); } catch {} renderRecent(); }
 let lastPost = 0;
 function postPlayback(force = true) {
@@ -106,6 +107,8 @@ function applyPlayback(p) {
 function renderRecent() {
   const items = getRecent().map((x) => ({ ...x, t: tracks.find((t) => t.id === x.id) })).filter((x) => x.t);
   $("#recent-wrap").hidden = !items.length;
+  const g = $("#music-glow"), first = items[0];
+  g.style.backgroundImage = first && first.t.has_art ? `url('${url("/api/music/art/" + first.t.id)}')` : "none";
   $("#recent-row").innerHTML = items.map((x, i) => `
     <button class="recent glass" data-i="${i}">
       <div class="art" ${x.t.has_art ? `style="background-image:url('${url("/api/music/art/" + x.t.id)}')"` : ""}>${x.t.has_art ? "" : ICON.note}</div>
@@ -247,18 +250,10 @@ function bindShared(el, items) {
   $$("[data-act]", el).forEach((b) => (b.onclick = async () => {
     const it = items.find((x) => x.id === b.closest(".sitem").dataset.id);
     if (!it) return;
-    if (b.dataset.act === "copy") { await navigator.clipboard.writeText(it.text); toast("Copied"); }
+    if (b.dataset.act === "copy") { await api("/api/clipboard/silent", { method: "POST", json: { text: it.text } }); toast("Copied"); }
     else if (it.path) invoke("reveal", { path: it.path });
   }));
 }
-$("#share-send").onclick = async () => {
-  const text = $("#share-text").value.trim();
-  if (!text) return;
-  await api("/api/shared/text", { method: "POST", json: { text } });
-  await api("/api/phone", { method: "POST", json: { cmd: "clipboard", text } });
-  $("#share-text").value = "";
-  toast("Sent to iPhone");
-};
 async function sendFiles(files) {
   for (const f of files) {
     toast(`Sending ${f.name}…`);
@@ -340,6 +335,8 @@ async function loadDevices() {
     el.innerHTML = `<div class="card glass empty" style="grid-column:1/-1"><b>No iPhone paired yet</b>Install MediaGrid on your iPhone and sign in with your account from the Profile tab.</div>`;
     return;
   }
+  try { callState = await api("/api/call"); } catch {}
+  renderCalls();
   el.innerHTML = list.map((d) => {
     const s = d.status || {};
     const np = s.now_playing;
@@ -347,16 +344,15 @@ async function loadDevices() {
     return `<div class="device glass" data-tok="${d.token}">
       <div class="d-head"><div class="d-ic">${ICON.phone}</div>
         <div style="flex:1"><div class="d-name">${esc(d.name)}</div>
-          <div class="d-state"><span class="dot ${s.connected ? "on" : ""}"></span>${s.connected ? "Connected" : s.last_seen ? "Last seen " + ago(s.last_seen) : "Not connected"}
-          ${s.model ? ` · ${esc(s.model)}` : ""}
-          ${bat !== null ? ` · <span class="battery"><i><b style="width:${bat}%"></b></i>${bat}%${s.charging ? " ⚡" : ""}</span>` : ""}</div></div></div>
+          <div class="d-state"><span class="dot ${s.connected ? "on" : ""}"></span>${s.connected ? "Connected" : s.last_seen ? "Last seen " + ago(s.last_seen) : "Not connected"}${s.model ? ` · ${esc(s.model)}` : ""}</div></div>
+        ${bat !== null ? `<div class="bat-ring" style="--p:${bat}"><b>${bat}%</b><small>${s.charging ? "charging" : "battery"}</small></div>` : ""}</div>
       ${np ? `<div class="d-np"><div class="art">${ICON.note}</div><div class="meta"><b>${esc(np.title)}</b><span>${esc(np.artist || "")}</span></div>
         <button class="ic" data-cmd="prev">${ICON.prev}</button><button class="ic" data-cmd="toggle">${np.playing ? ICON.pause : ICON.play}</button><button class="ic" data-cmd="next">${ICON.next}</button></div>` : ""}
-      <div class="d-actions">
-        <button class="btn glass small" data-cmd="find">Find iPhone</button>
-        <button class="btn glass small" data-cmd="syncPhotos">Sync photos</button>
-        <button class="btn glass small" data-cmd="shuffle">Shuffle music on iPhone</button>
-        <button class="btn danger small" data-revoke="${d.token}">Unpair</button>
+      <div class="tiles">
+        <button class="tile-btn" data-cmd="find"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Find iPhone</button>
+        <button class="tile-btn" data-cmd="syncPhotos"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>Sync photos</button>
+        <button class="tile-btn" data-cmd="shuffle"><svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>Shuffle music</button>
+        <button class="tile-btn danger" data-revoke="${d.token}"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>Unpair</button>
       </div></div>`;
   }).join("");
   $$("[data-cmd]", el).forEach((b) => (b.onclick = async () => {
@@ -366,6 +362,21 @@ async function loadDevices() {
     toast(c === "find" ? "Ringing your iPhone…" : c === "syncPhotos" ? "Asked iPhone to sync photos" : "Sent");
   }));
   $$("[data-revoke]", el).forEach((b) => (b.onclick = async () => { await invoke("revoke_device", { prefix: b.dataset.revoke }); loadDevices(); }));
+}
+/* calls reported by the iPhone (state only: iOS does not share who is calling, SMS or contacts) */
+let callState = { current: null, log: [] };
+const dur = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+function renderCalls() {
+  const c = callState.current, log = callState.log || [];
+  const label = { ringing: "Incoming call", dialing: "Calling…", active: "On a call" };
+  const live = c ? `<div class="call-live ${c.state}"><div class="cl-ic">${ICON.phone}</div><div><b>${label[c.state] || "Call"}</b><span>${c.state === "active" ? "Talking on your iPhone" : "Your iPhone"}</span></div></div>` : "";
+  const rows = log.map((x) => {
+    const missed = !x.answered && x.direction !== "outgoing";
+    const kind = x.direction === "outgoing" ? "Outgoing" : missed ? "Missed" : "Incoming";
+    return `<div class="call-row ${missed ? "missed" : ""}"><div class="cr-ic">${ICON.phone}</div><div class="cr-body"><b>${kind} call</b><span>${ago(x.at)}</span></div><div class="cr-dur">${x.answered ? dur(x.duration || 0) : "—"}</div></div>`;
+  }).join("");
+  $("#calls").innerHTML = `<h3>Calls</h3>${live}${rows || `<div class="muted">No calls yet. A floating bubble appears here on your PC while your iPhone is in a call.</div>`}
+    <div class="hint"><div><b>Messages & contacts</b>iPhone does not let apps read SMS or contacts, so they can't appear here.</div></div>`;
 }
 $("#req-sync").onclick = async () => { await api("/api/phone", { method: "POST", json: { cmd: "syncPhotos" } }); toast("Asked iPhone to sync new photos"); };
 
@@ -442,6 +453,11 @@ T.event.listen("mg", ({ payload }) => {
     if (data.item && media.length) { media.unshift(data.item); if ($("#tab-media").classList.contains("active")) renderMedia(); }
   }
   else if (event === "playback") applyPlayback(data);
+  else if (event === "call") {
+    if (data.state === "ended") { callState.current = null; callState.log = [data, ...(callState.log || [])].slice(0, 30); toast(data.answered ? `Call ended · ${dur(data.duration || 0)}` : "Missed call"); }
+    else callState.current = data;
+    renderCalls();
+  }
   else if (event === "playlists") { playlists = data; loadTracks(); }
   else if (event === "error") toast(data.message);
 });

@@ -166,6 +166,8 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `GET /api/screen?w=1280&q=60` | JPEG screenshot |
 | `GET/POST /api/playback` | shared now-playing + recently played `{recent:[{id,at,pos,device}], now}`; POST `{id,pos,playing,device}`; pushes `playback` event |
 | `GET/POST /api/playlists` | user playlists `[{id,name,trackIDs}]` shared by all devices (last writer wins); pushes `playlists` event |
+| `GET/POST /api/call` | phone call state `{state: ringing\|dialing\|active\|ended, direction}` → PC floating call bubble; GET returns `{current, log}` |
+| `POST /api/clipboard/silent` | set PC clipboard without syncing (history copy) |
 | `GET /api/devices`, `POST /api/phone` | paired phones; send command to phone |
 | `GET /ws?t=` | WebSocket |
 

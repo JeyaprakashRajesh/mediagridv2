@@ -66,6 +66,8 @@ pub async fn run(app: Shared) {
         .route("/api/screen", get(screen))
         .route("/api/devices", get(devices))
         .route("/api/playback", get(playback_get).post(playback_set))
+        .route("/api/call", get(call_get).post(call_set))
+        .route("/api/clipboard/silent", post(clip_silent))
         .route("/api/playlists", get(playlists_get).post(playlists_set))
         .route("/api/phone", post(phone_cmd))
         .route("/ws", get(ws))
@@ -431,6 +433,48 @@ async fn clip_set(State(app): State<Shared>, axum::Extension(w): axum::Extension
     crate::clip::set_text(&b.text);
     let from = who_name(&app, &w);
     app.add_shared(SharedItem { id: random_hex(8), kind: "clipboard".into(), text: Some(b.text), name: None, size: None, path: None, from, at: now_ms() });
+    Json(json!({ "ok": true }))
+}
+
+/// Put text on the PC clipboard without syncing it anywhere (copying from the history list).
+async fn clip_silent(State(app): State<Shared>, Json(b): Json<TextBody>) -> Json<Value> {
+    if !b.text.is_empty() {
+        *app.last_clip.lock() = b.text.clone();
+        crate::clip::set_text(&b.text);
+    }
+    Json(json!({ "ok": true }))
+}
+
+async fn call_get(State(app): State<Shared>) -> Json<Value> {
+    let current = app.call.read().clone();
+    let log = app.calls.read().clone();
+    Json(json!({ "current": current, "log": log }))
+}
+
+/// The phone reports its call state; the PC shows a floating bubble while the call lasts.
+async fn call_set(State(app): State<Shared>, axum::Extension(w): axum::Extension<Who>, Json(b): Json<Value>) -> Json<Value> {
+    let device = who_name(&app, &w);
+    let v = app.set_call(&b, &device);
+    app.ui("call", v.clone());
+    let a = app.clone();
+    if v["state"] == "ended" {
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+            a.call_bubble(false);
+        });
+    } else if !v.is_null() {
+        app.call_bubble(true);
+        // the bubble window may finish loading after the first event: repeat the current state
+        tokio::spawn(async move {
+            for ms in [700u64, 2000] {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                let cur = a.call.read().clone();
+                if !cur.is_null() {
+                    a.ui("call", cur);
+                }
+            }
+        });
+    }
     Json(json!({ "ok": true }))
 }
 

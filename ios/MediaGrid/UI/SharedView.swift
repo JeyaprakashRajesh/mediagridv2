@@ -7,13 +7,11 @@ struct SharedView: View {
     @EnvironmentObject var store: SharedStore
     @EnvironmentObject var clip: ClipboardSync
     @EnvironmentObject var conn: Connection
-    @State private var text = ""
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importing = false
     @State private var sending = false
     @State private var preview: URL?
     @State private var error: String?
-    @FocusState private var focused: Bool
 
     var body: some View {
         NavigationStack {
@@ -21,19 +19,22 @@ struct SharedView: View {
                 AppBackground()
                 ScrollView {
                     VStack(spacing: 18) {
+                        HStack {
+                            Text("Shared").font(.largeTitle.weight(.bold))
+                            Spacer()
+                            if store.loading { ProgressView().controlSize(.small) }
+                        }
+                        .padding(.top, 6)
                         clipboardCard
-                        composer
                         actions
                         history
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 60)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .trackScrollDirection()
                 .refreshable { await store.refresh() }
             }
-            .navigationTitle("Shared")
+            .toolbar(.hidden, for: .navigationBar)
             .task { await store.refresh() }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { r in
                 guard case .success(let urls) = r else { return }
@@ -47,59 +48,50 @@ struct SharedView: View {
         }
     }
 
+    /// Live status of the automatic clipboard, with the latest copied text.
     private var clipboardCard: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "doc.on.clipboard.fill").font(.title2).foregroundStyle(.white)
-                .frame(width: 50, height: 50).background(Theme.brand, in: .rect(cornerRadius: 15))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Universal Clipboard").font(.headline)
-                Text(clip.auto ? "Copy on PC → paste here. Copy here → it's on your PC when you open MediaGrid." : "Off — turn on to sync copies automatically")
-                    .font(.caption).foregroundStyle(.secondary)
+        let latest = store.items.first { !$0.isFile }
+        let online = conn.state == .online
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.on.clipboard.fill").font(.title2).foregroundStyle(.white)
+                    .frame(width: 52, height: 52).background(Theme.accent, in: .rect(cornerRadius: 16))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Universal Clipboard").font(.headline)
+                    HStack(spacing: 6) {
+                        Circle().fill(clip.auto && online ? Theme.mint : .orange).frame(width: 8, height: 8)
+                        Text(!clip.auto ? "Paused" : online ? "In sync with \(conn.pcName)" : "Waiting for your PC…")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Toggle("", isOn: $clip.auto).labelsHidden().tint(Theme.accent)
             }
-            Spacer()
-            Toggle("", isOn: $clip.auto).labelsHidden().tint(Theme.violet)
+            if let latest, let t = latest.text {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("LATEST").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    Text(t).font(.subheadline).lineLimit(3)
+                    Label("\(latest.from == "pc" ? "From PC" : "From iPhone") · \(latest.date.relative)",
+                          systemImage: latest.from == "pc" ? "desktopcomputer" : "iphone")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.12), in: .rect(cornerRadius: 16))
+            }
+            Text("Copy on either device and it's ready to paste on the other. On iPhone this works while MediaGrid is open.")
+                .font(.caption).foregroundStyle(.tertiary)
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
-    }
-
-    private var composer: some View {
-        VStack(spacing: 12) {
-            TextField("Send text, a link or a code to your PC…", text: $text, axis: .vertical)
-                .lineLimit(3...8)
-                .focused($focused)
-                .padding(14)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-            HStack(spacing: 10) {
-                PasteButton(payloadType: String.self) { strings in
-                    guard let s = strings.first else { return }
-                    Task { @MainActor in ClipboardSync.shared.send(s); Coordinator.shared.show("Clipboard sent to PC") }
-                }
-                .buttonBorderShape(.capsule)
-                .tint(Theme.violet)
-                .labelStyle(.titleAndIcon)
-                Spacer()
-                Button {
-                    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !t.isEmpty else { return }
-                    Task {
-                        do { try await store.sendText(t); text = ""; focused = false; Haptics.success() }
-                        catch { self.error = error.localizedDescription }
-                    }
-                } label: { Label("Send", systemImage: "paperplane.fill") }
-                .buttonStyle(.glassProminent).tint(Theme.violet)
-                .disabled(text.isEmpty)
-            }
-        }
+        .glassEffect(.regular, in: .rect(cornerRadius: 28))
     }
 
     private var actions: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 30, matching: .any(of: [.images, .videos])) {
-                    actionLabel("Photos", "photo.on.rectangle", Theme.pink)
+                    actionLabel("Photos", "photo.on.rectangle", Theme.accent)
                 }
-                Button { importing = true } label: { actionLabel("Files", "folder.fill", Theme.cyan) }
+                Button { importing = true } label: { actionLabel("Files", "folder.fill", Theme.accent) }
             }
         }
         .buttonStyle(.plain)
@@ -119,11 +111,7 @@ struct SharedView: View {
 
     private var history: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("History").font(.title3.weight(.bold))
-                Spacer()
-                if store.loading { ProgressView().controlSize(.small) }
-            }
+            Text("History").font(.title3.weight(.bold))
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             if store.items.isEmpty {
                 Text("Things you copy or send between your PC and iPhone show up here.")
@@ -143,7 +131,7 @@ struct SharedView: View {
                 do { preview = try await store.fetch(i) } catch { self.error = error.localizedDescription }
             }
         } else if let t = i.text {
-            UIPasteboard.general.string = t
+            ClipboardSync.shared.copyFromHistory(t)
             Haptics.success()
             Coordinator.shared.show("Copied")
         }
@@ -203,12 +191,12 @@ struct SharedRow: View {
                 Image(systemName: item.isFile ? "eye" : "doc.on.doc").font(.footnote).foregroundStyle(.secondary)
             }
             .padding(12)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
         }
         .buttonStyle(.plain)
         .contextMenu {
             if let t = item.text {
-                Button { UIPasteboard.general.string = t } label: { Label("Copy", systemImage: "doc.on.doc") }
+                Button { ClipboardSync.shared.copyFromHistory(t) } label: { Label("Copy", systemImage: "doc.on.doc") }
                 ShareLink(item: t)
             }
         }

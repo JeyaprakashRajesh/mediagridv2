@@ -228,6 +228,33 @@ final class ClipboardSync: ObservableObject {
     }
     @Published var lastReceived: String?
     private var lastChange = UserDefaults.standard.integer(forKey: "mg.clipChange")
+    private var lastSent = ""
+    private var timer: Timer?
+    private var obs: NSObjectProtocol?
+
+    /// While MediaGrid is on screen, watch the pasteboard and send every new copy to the PC. (iOS gives no access in the background.)
+    func startWatching() {
+        stopWatching()
+        obs = NotificationCenter.default.addObserver(forName: UIPasteboard.changedNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ClipboardSync.shared.checkPhoneClipboard() }
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            MainActor.assumeIsolated { ClipboardSync.shared.checkPhoneClipboard() }
+        }
+    }
+
+    func stopWatching() {
+        timer?.invalidate(); timer = nil
+        if let obs { NotificationCenter.default.removeObserver(obs); self.obs = nil }
+    }
+
+    /// Copying an item out of the history list is a local action: it must not be synced back to the PC.
+    func copyFromHistory(_ s: String) {
+        UIPasteboard.general.string = s
+        lastChange = UIPasteboard.general.changeCount
+        UserDefaults.standard.set(lastChange, forKey: "mg.clipChange")
+        lastSent = s
+    }
 
     func receivedFromPC(_ text: String) {
         guard !text.isEmpty else { return }
@@ -245,11 +272,12 @@ final class ClipboardSync: ObservableObject {
         guard pb.changeCount != lastChange else { return }
         lastChange = pb.changeCount
         UserDefaults.standard.set(lastChange, forKey: "mg.clipChange")
-        guard pb.hasStrings, let s = pb.string, !s.isEmpty else { return }
+        guard pb.hasStrings, let s = pb.string, !s.isEmpty, s != lastSent, s != lastReceived else { return }
         send(s)
     }
 
     func send(_ s: String) {
+        lastSent = s
         Task { try? await Connection.shared.post("/api/clipboard", json: ["text": s]) }
     }
 }

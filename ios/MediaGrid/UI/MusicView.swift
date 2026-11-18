@@ -40,6 +40,7 @@ struct MusicView: View {
         NavigationStack {
             ZStack {
                 AppBackground()
+                recentGlow
                 VStack(spacing: 12) {
                     header
                     searchField
@@ -58,6 +59,22 @@ struct MusicView: View {
                 Button("Create") { if !playlistName.isEmpty { music.createPlaylist(playlistName) }; playlistName = "" }
                 Button("Cancel", role: .cancel) { playlistName = "" }
             }
+        }
+    }
+
+    /// Soft gradient at the top of the Music screen, coloured by the artwork of the last song you played.
+    @ViewBuilder private var recentGlow: some View {
+        if let r = music.recentlyPlayed.first {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 380)
+                    .overlay { ArtworkView(track: r.track, size: 500, radius: 0).blur(radius: 70).scaleEffect(1.5).opacity(0.55) }
+                    .clipped()
+                    .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
+                Spacer()
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .animation(.smooth, value: r.track.id)
         }
     }
 
@@ -180,42 +197,33 @@ struct MusicView: View {
         .accessibilityLabel(music.syncing ? "Stop sync" : "Sync \(pending) songs for offline")
     }
 
-    /// "Continue where you left off": one big full-width card per song, swipe for older ones.
+    /// "Continue where you left off": just the last song you played, as one big full-width card.
     @ViewBuilder private var recentSection: some View {
         let recent = music.recentlyPlayed
-        if !recent.isEmpty {
+        if let item = recent.first {
             let list = recent.map(\.track)
             VStack(alignment: .leading, spacing: 12) {
                 SectionHeader(title: "Recently played")
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(recent, id: \.track.id) { item in
-                            Button { player.playRecent(item.track, in: list, pos: item.pos); Haptics.tap() } label: {
-                                HStack(spacing: 16) {
-                                    ArtworkView(track: item.track, size: 116, radius: 22).cardShadow()
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(item.track.title).font(.title3.weight(.bold)).lineLimit(2)
-                                        Text(item.track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                        Label(item.pos > 3 ? "\(item.at.relative) · resume \(item.pos.mmss)" : item.at.relative, systemImage: "clock")
-                                            .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    Image(systemName: player.current?.id == item.track.id && player.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.title2).foregroundStyle(.white)
-                                        .frame(width: 58, height: 58)
-                                        .background(Theme.accent, in: .circle)
-                                }
-                                .padding(14)
-                                .containerRelativeFrame(.horizontal) { w, _ in w - 40 }
-                                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 30))
-                            }
-                            .buttonStyle(.plain)
+                Button { player.playRecent(item.track, in: list, pos: item.pos); Haptics.tap() } label: {
+                    HStack(spacing: 16) {
+                        ArtworkView(track: item.track, size: 116, radius: 22).cardShadow()
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.track.title).font(.title3.weight(.bold)).lineLimit(2)
+                            Text(item.track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            Label(item.pos > 3 ? "\(item.at.relative) · resume \(item.pos.mmss)" : item.at.relative, systemImage: "clock")
+                                .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: player.current?.id == item.track.id && player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2).foregroundStyle(.white)
+                            .frame(width: 58, height: 58)
+                            .background(Theme.accent, in: .circle)
                     }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, 20)
+                    .padding(14)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 30))
                 }
-                .scrollTargetBehavior(.viewAligned)
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
             }
         }
     }
@@ -314,20 +322,33 @@ struct MusicView: View {
     }
 }
 
+/// The poster you see on the home screen (colour + artwork collage + title), at any size.
+struct MixArt: View {
+    let colors: [Color]
+    let tracks: [Track]
+    let symbol: String
+    let title: String
+    let size: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            colors.first ?? Theme.accent
+            CoverGrid(tracks: Array(tracks.filter(\.has_art).prefix(4)), size: size).opacity(0.35).blendMode(.overlay)
+            Image(systemName: symbol).font(.system(size: size * 0.38, weight: .bold)).foregroundStyle(.white.opacity(0.18))
+                .offset(x: size * 0.53, y: -size * 0.35)
+            Text(title).font(size > 200 ? .largeTitle.weight(.heavy) : .title3.weight(.heavy)).foregroundStyle(.white)
+                .lineLimit(2).minimumScaleFactor(0.7).padding(size * 0.08)
+        }
+        .frame(width: size, height: size)
+        .clipShape(.rect(cornerRadius: size * 0.13))
+    }
+}
+
 struct MixCard: View {
     let mix: SmartMix
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomLeading) {
-                (mix.colors.first ?? Theme.accent)
-                CoverGrid(tracks: Array(mix.tracks.filter(\.has_art).prefix(4)), size: 170).opacity(0.35).blendMode(.overlay)
-                Image(systemName: mix.symbol).font(.system(size: 64, weight: .bold)).foregroundStyle(.white.opacity(0.18))
-                    .offset(x: 90, y: -60)
-                Text(mix.title).font(.title3.weight(.heavy)).foregroundStyle(.white).padding(14)
-            }
-            .frame(width: 170, height: 170)
-            .clipShape(.rect(cornerRadius: 22))
-            .cardShadow()
+            MixArt(colors: mix.colors, tracks: mix.tracks, symbol: mix.symbol, title: mix.title, size: 170).cardShadow()
             Text(mix.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(width: 170, alignment: .leading)
         }
     }
@@ -374,36 +395,49 @@ struct CollectionView: View {
         let ts = tracks
         ScrollView {
             VStack(spacing: 18) {
-                // header art
-                ZStack {
-                    if collection.artTrack != nil {
-                        ArtworkView(track: collection.artTrack, size: 230, radius: 26)
-                    } else {
-                        ZStack {
-                            collection.colors.first ?? Theme.accent
-                            Image(systemName: collection.symbol).font(.system(size: 80, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                // header art: the same poster as on the home screen
+                Group {
+                    if collection.playlist != nil {
+                        if ts.isEmpty {
+                            ZStack {
+                                Theme.accent.opacity(0.18)
+                                Image(systemName: "music.note.list").font(.system(size: 70)).foregroundStyle(Theme.accent)
+                            }
+                            .frame(width: 250, height: 250).clipShape(.rect(cornerRadius: 32))
+                        } else {
+                            CoverGrid(tracks: Array(ts.prefix(4)), size: 250).clipShape(.rect(cornerRadius: 32))
                         }
-                        .frame(width: 230, height: 230).clipShape(.rect(cornerRadius: 26))
+                    } else if collection.artTrack != nil {
+                        ArtworkView(track: collection.artTrack, size: 250, radius: 32)
+                    } else {
+                        MixArt(colors: collection.colors, tracks: ts, symbol: collection.symbol, title: collection.title, size: 250)
                     }
                 }
-                .shadow(color: (collection.colors.first ?? .black).opacity(0.5), radius: 40, y: 20)
+                .shadow(color: (collection.colors.first ?? Theme.accent).opacity(0.45), radius: 34, y: 18)
                 .padding(.top, 10)
 
                 VStack(spacing: 4) {
                     Text(collection.title).font(.title.weight(.heavy)).multilineTextAlignment(.center)
-                    Text("\(collection.subtitle) · \(ts.count) songs · \(Int(ts.reduce(0) { $0 + $1.duration } / 60)) min")
-                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(collection.subtitle).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(2)
+                    Text("\(ts.count) songs · \(Int(ts.reduce(0) { $0 + $1.duration } / 60)) min")
+                        .font(.footnote.weight(.medium)).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal)
 
                 GlassEffectContainer(spacing: 12) {
                     HStack(spacing: 12) {
-                        Button { player.play(ts, shuffle: false, source: collection.title) } label: {
-                            Label("Play in order", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 4)
+                        let here = player.source == collection.title && player.current != nil
+                        Button {
+                            if here { player.toggle() } else { player.play(ts, shuffle: false, source: collection.title) }
+                            Haptics.soft()
+                        } label: {
+                            Label(here && player.isPlaying ? "Pause" : "Play", systemImage: here && player.isPlaying ? "pause.fill" : "play.fill")
+                                .contentTransition(.symbolEffect(.replace))
+                                .frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
-                        .buttonStyle(.glassProminent).tint(Theme.violet)
-                        Button { player.play(ts, shuffle: true, source: collection.title) } label: {
-                            Label("Shuffle play", systemImage: "shuffle").frame(maxWidth: .infinity).padding(.vertical, 4)
+                        .buttonStyle(.glassProminent).tint(Theme.accent)
+                        Button { player.play(ts, shuffle: true, source: collection.title); Haptics.soft() } label: {
+                            Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
                         .buttonStyle(.glass)
                         let pending = ts.filter { !music.isDownloaded($0) }
@@ -421,7 +455,9 @@ struct CollectionView: View {
                         TrackRow(track: t, playlist: collection.playlist) { player.play(ts, start: t, shuffle: false, source: collection.title) }
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(8)
+                .background(.thinMaterial, in: .rect(cornerRadius: 26))
+                .padding(.horizontal, 14)
             }
             .padding(.bottom, 60)
         }

@@ -44,6 +44,9 @@ pub struct App {
     pub playback: RwLock<serde_json::Value>,
     /// Playlists made on any device (JSON array), shared through the PC.
     pub playlists: RwLock<serde_json::Value>,
+    /// The phone's current call (or null) and the finished calls, newest first.
+    pub call: RwLock<serde_json::Value>,
+    pub calls: RwLock<Vec<serde_json::Value>>,
     pub last_clip: Mutex<String>,
     pub synced: Mutex<HashSet<String>>,
     pub ui_token: String,
@@ -86,6 +89,8 @@ impl App {
             shared: RwLock::new(shared),
             playback: RwLock::new(playback),
             playlists: RwLock::new(playlists),
+            call: RwLock::new(serde_json::Value::Null),
+            calls: RwLock::new(Vec::new()),
             last_clip: Mutex::new(String::new()),
             synced: Mutex::new(config::load_synced()),
             ui_token: config::random_hex(16),
@@ -155,6 +160,73 @@ impl App {
             let _ = std::fs::write(config::data_dir().join("playback.json"), j);
         }
         v
+    }
+
+    /// Track the phone's call (ringing / dialing / active / ended). Returns the payload for the UI.
+    pub fn set_call(&self, b: &serde_json::Value, device: &str) -> serde_json::Value {
+        let state = b["state"].as_str().unwrap_or("").to_string();
+        let direction = b["direction"].as_str().unwrap_or("incoming").to_string();
+        let now = now_ms();
+        let mut c = self.call.write();
+        match state.as_str() {
+            "ringing" | "dialing" => {
+                *c = serde_json::json!({ "state": state, "direction": direction, "since": now, "started": null, "device": device });
+                c.clone()
+            }
+            "active" => {
+                let since = c["since"].as_i64().unwrap_or(now);
+                let dir = c["direction"].as_str().map(|s| s.to_string()).unwrap_or(direction);
+                *c = serde_json::json!({ "state": "active", "direction": dir, "since": since, "started": now, "device": device });
+                c.clone()
+            }
+            "ended" => {
+                let started = c["started"].as_i64();
+                let dir_v = if c.is_null() { serde_json::Value::String(direction) } else { c["direction"].clone() };
+                let since_v = if c.is_null() { serde_json::json!(now) } else { c["since"].clone() };
+                let secs: i64 = started.map(|s| (now - s) / 1000).unwrap_or(0);
+                let payload = serde_json::json!({
+                    "state": "ended",
+                    "direction": dir_v,
+                    "answered": started.is_some(),
+                    "since": since_v,
+                    "duration": secs,
+                    "device": device
+                });
+                if !c.is_null() {
+                    let mut l = self.calls.write();
+                    l.insert(0, payload.clone());
+                    l.truncate(30);
+                }
+                *c = serde_json::Value::Null;
+                payload
+            }
+            _ => c.clone(),
+        }
+    }
+
+    /// Floating "call bubble" window (always on top, draggable) shown while the phone is in a call.
+    pub fn call_bubble(&self, show: bool) {
+        use tauri::Manager;
+        let Some(h) = self.handle.get() else { return };
+        if show {
+            if h.get_webview_window("callbubble").is_some() {
+                return;
+            }
+            let _ = tauri::WebviewWindowBuilder::new(h, "callbubble", tauri::WebviewUrl::App("call.html".into()))
+                .title("MediaGrid call")
+                .inner_size(320.0, 80.0)
+                .position(24.0, 64.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .shadow(false)
+                .focused(false)
+                .build();
+        } else if let Some(w) = h.get_webview_window("callbubble") {
+            let _ = w.close();
+        }
     }
 
     /// Push an event to every connected phone.

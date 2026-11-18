@@ -9,7 +9,7 @@ struct RootView: View {
     @EnvironmentObject var media: MediaStore
     @State private var tab: AppTab = .music
     @State private var showPlayer = false
-    @AppStorage("mg.accent") private var accent = "blue"
+    @AppStorage("mg.accent") private var accent = "gold"
 
     var body: some View {
         ZStack {
