@@ -1,0 +1,1 @@
+Commit the current changes with a clear message, push to main, watch the GitHub Actions run (`gh run list` / `gh run view`), fix any compile errors until ios and windows are green, then fetch the `builds` branch and report where MediaGrid.ipa and MediaGrid-Setup.exe are.
