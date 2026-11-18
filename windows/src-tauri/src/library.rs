@@ -1,6 +1,5 @@
 use crate::config::{cache_dir, id_for};
 use lofty::prelude::*;
-use lofty::tag::ItemKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -137,13 +136,8 @@ fn read_track(path: &Path, meta: &std::fs::Metadata, root: &Path) -> Track {
         if let Some(tag) = f.primary_tag().or_else(|| f.first_tag()) {
             let t_title = tag.title().map(|v| clean(&v)).unwrap_or_default();
             if !t_title.is_empty() { t.title = t_title; }
-            // singers first, then the album artist / composer when the artist tag was only branding
-            let artist = [tag.artist().map(|v| v.to_string()), tag.get_string(&ItemKey::AlbumArtist).map(String::from), tag.get_string(&ItemKey::Composer).map(String::from)]
-                .into_iter()
-                .flatten()
-                .map(|v| clean(&v))
-                .find(|v| !v.is_empty());
-            if let Some(a) = artist { t.artist = a; }
+            let t_artist = tag.artist().map(|v| clean(&v)).unwrap_or_default();
+            if !t_artist.is_empty() { t.artist = t_artist; }
             let t_album = tag.album().map(|v| clean(&v)).unwrap_or_default();
             if !t_album.is_empty() { t.album = t_album; }
             t.track = tag.track().unwrap_or(0);

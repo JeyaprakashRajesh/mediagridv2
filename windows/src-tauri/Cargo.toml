@@ -25,7 +25,7 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 lofty = "0.25"
-symphonia = { version = "0.5", features = ["all"] }
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "flac", "ogg", "vorbis", "wav", "pcm", "alac"] }
 ureq = { version = "2", features = ["json"] }
 walkdir = "2"
 sha2 = "0.10"
