@@ -14,7 +14,7 @@ struct PCView: View {
                 AppBackground()
                 VStack(spacing: 12) {
                     header
-                    Picker("", selection: $section.animation(.smooth)) {
+                    Picker("", selection: $section.animation(.smooth(duration: 0.2))) {
                         Text("Files").tag(0)
                         Text("Access PC").tag(1)
                     }

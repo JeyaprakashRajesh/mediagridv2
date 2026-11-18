@@ -29,6 +29,7 @@ final class Player: ObservableObject {
     private var counted = false
     private var artwork: MPMediaItemArtwork?
     private var recentArtists: [String] = []
+    private var autoplayed = Set<String>()
 
     var upNext: [Track] {
         guard pos + 1 < order.count else { return [] }
@@ -70,7 +71,7 @@ final class Player: ObservableObject {
 
     private func activateSession() {
         let s = AVAudioSession.sharedInstance()
-        try? s.setCategory(.playback, mode: .default, policy: .longFormAudio)
+        try? s.setCategory(.playback, mode: .default)
         try? s.setActive(true)
     }
 
@@ -237,8 +238,10 @@ final class Player: ObservableObject {
         Task { await Connection.shared.sendStatus() }
     }
 
-    func next() {
+    func next(userSkip: Bool = true) {
         guard !order.isEmpty else { return }
+        if userSkip, let t = current, time < 20 { MusicStore.shared.noteSkipped(t) }
+        if advanceIntoGenre() { return }
         if pos + 1 < order.count {
             pos += 1
         } else {
@@ -262,12 +265,46 @@ final class Player: ObservableObject {
         postPlayback()
     }
 
+    /// End of the queue: keep going like Spotify / YouTube Music radio. Same genre first, then songs from the same era
+    /// (a 2000s Melody song leads to more 2000s Melody), ranked by popularity with some variety, skipping what you heard in the last 3 days.
+    private func advanceIntoGenre() -> Bool {
+        guard pos + 1 >= order.count, repeatMode != .all,
+              UserDefaults.standard.object(forKey: "mg.autoplayGenre") as? Bool ?? true,
+              let cur = current, let g = cur.genre else { return false }
+        let store = MusicStore.shared
+        let now = Date().timeIntervalSince1970
+        let inQueue = Set(queue.map(\.id))
+        func era(_ t: Track) -> Double {          // closeness in release year
+            guard cur.year > 0, t.year > 0 else { return t.year == 0 ? -0.5 : 0 }
+            let d = abs(t.year - cur.year)
+            return d <= 2 ? 2 : d <= 5 ? 1 : d <= 10 ? 0.3 : -1
+        }
+        var pool = store.tracks.filter { $0.genre == g && !inQueue.contains($0.id) && !autoplayed.contains($0.id) }
+        if pool.count < 10, cur.year > 0 {        // small genre: widen to the same years in other genres
+            pool += store.tracks.filter { $0.genre != g && $0.year > 0 && abs($0.year - cur.year) <= 3 && !inQueue.contains($0.id) && !autoplayed.contains($0.id) }
+        }
+        let fresh = pool.filter { now - (store.lastPlayed[$0.id] ?? 0) > 3 * 86400 }
+        if fresh.count >= 5 { pool = fresh }
+        let scores = store.popularityScores()
+        let picks = pool.map { ($0, (scores[$0.id] ?? 0) + era($0) + Double.random(in: 0..<2.5)) }
+            .sorted { $0.1 > $1.1 }.prefix(20).map(\.0)
+        guard !picks.isEmpty else { return false }
+        for t in picks { autoplayed.insert(t.id); queue.append(t); order.append(queue.count - 1) }
+        let decade = cur.year >= 1950 ? "\(cur.year / 10 * 10)s " : ""
+        source = "\(decade)\(g) · Autoplay"
+        collectionID = nil
+        pos += 1
+        load()
+        return true
+    }
+
     private func finished() {
         if repeatMode == .one { seek(0); player.play(); return }
+        if advanceIntoGenre() { return }
         if pos + 1 >= order.count && repeatMode == .off && !shuffle {
             isPlaying = false; publish(); return
         }
-        next()
+        next(userSkip: false)
     }
 
     private func tick(_ s: Double) {
@@ -275,7 +312,11 @@ final class Player: ObservableObject {
         time = s
         if Int(s) % 5 == 0 { saveResume() }
         if isPlaying { postPlayback(force: false) }
-        if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0 { duration = d }
+        if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0 {
+            let changed = abs(d - duration) > 0.5
+            duration = d
+            if changed { publish() }   // lock screen needs the real length to enable its seek bar
+        }
         buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         if !counted, let t = current, s > min(30, duration * 0.5) {
             counted = true
@@ -306,6 +347,8 @@ final class Player: ObservableObject {
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: time,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
         if let artwork { info[MPMediaItemPropertyArtwork] = artwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -314,6 +357,8 @@ final class Player: ObservableObject {
 
     private func setupRemote() {
         let c = MPRemoteCommandCenter.shared()
+        [c.playCommand, c.pauseCommand, c.togglePlayPauseCommand, c.nextTrackCommand, c.previousTrackCommand, c.changePlaybackPositionCommand]
+            .forEach { $0.isEnabled = true }
         c.playCommand.addTarget { _ in MainActor.assumeIsolated { Player.shared.resume() }; return .success }
         c.pauseCommand.addTarget { _ in MainActor.assumeIsolated { Player.shared.pause() }; return .success }
         c.togglePlayPauseCommand.addTarget { _ in MainActor.assumeIsolated { Player.shared.toggle() }; return .success }

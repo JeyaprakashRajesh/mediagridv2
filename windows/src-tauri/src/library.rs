@@ -1,5 +1,6 @@
 use crate::config::{cache_dir, id_for};
 use lofty::prelude::*;
+use lofty::tag::ItemKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -61,6 +62,43 @@ fn mtime(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// Removes the "MassTamilan" branding that scraped files carry in almost every tag
+/// ("Title - MassTamilan", "Album - MassTamilan", "MassTamilan.dev"). Returns "" if nothing else is left.
+fn clean(s: &str) -> String {
+    const BRAND: &str = "masstamilan";
+    let mut out = s.trim().to_string();
+    while let Some(i) = out.to_ascii_lowercase().find(BRAND) {
+        let mut end = i + BRAND.len();
+        if out[end..].starts_with('.') {
+            end += 1 + out[end + 1..].chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        }
+        let head = out[..i].trim_end().trim_end_matches(|c| matches!(c, '-' | '–' | '—' | '|' | '(' | '[' | ':')).trim_end().to_string();
+        let tail = out[end..].trim_start().trim_start_matches(|c| matches!(c, ')' | ']')).trim_start().to_string();
+        out = format!("{head} {tail}").trim().to_string();
+    }
+    out
+}
+
+/// Scraped file names look like "meesaya-murukku-2-2026 - Middle Class.mp3": "<album slug>-<year> - <title>".
+fn scraped_name(stem: &str) -> Option<(String, u32, String)> {
+    let (left, title) = stem.split_once(" - ")?;
+    let (slug, year) = left.rsplit_once('-')?;
+    let year: u32 = year.parse().ok().filter(|y| (1900..2100).contains(y) && left.len() - slug.len() == 5)?;
+    if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return None;
+    }
+    let album = slug
+        .split('-')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((album, year, title.trim().to_string()))
+}
+
 fn read_track(path: &Path, meta: &std::fs::Metadata, root: &Path) -> Track {
     let ps = path.to_string_lossy().to_string();
     let id = id_for(&ps);
@@ -85,19 +123,31 @@ fn read_track(path: &Path, meta: &std::fs::Metadata, root: &Path) -> Track {
             if let Some(n) = parent.file_name() { t.album = n.to_string_lossy().to_string(); }
         }
     }
-    // "Artist - Title.mp3" fallback
-    if let Some((a, b)) = stem.split_once(" - ") {
+    // "<album slug>-<year> - Title.mp3" (scraped sites), else "Artist - Title.mp3"
+    if let Some((album, year, title)) = scraped_name(&stem) {
+        t.album = album;
+        t.year = year;
+        t.title = title;
+    } else if let Some((a, b)) = stem.split_once(" - ") {
         t.artist = a.trim().into();
         t.title = b.trim().into();
     }
     if let Ok(f) = lofty::read_from_path(path) {
         t.duration = f.properties().duration().as_secs_f64();
         if let Some(tag) = f.primary_tag().or_else(|| f.first_tag()) {
-            if let Some(v) = tag.title() { if !v.trim().is_empty() { t.title = v.trim().to_string(); } }
-            if let Some(v) = tag.artist() { if !v.trim().is_empty() { t.artist = v.trim().to_string(); } }
-            if let Some(v) = tag.album() { if !v.trim().is_empty() { t.album = v.trim().to_string(); } }
+            let t_title = tag.title().map(|v| clean(&v)).unwrap_or_default();
+            if !t_title.is_empty() { t.title = t_title; }
+            // singers first, then the album artist / composer when the artist tag was only branding
+            let artist = [tag.artist().map(|v| v.to_string()), tag.get_string(&ItemKey::AlbumArtist).map(String::from), tag.get_string(&ItemKey::Composer).map(String::from)]
+                .into_iter()
+                .flatten()
+                .map(|v| clean(&v))
+                .find(|v| !v.is_empty());
+            if let Some(a) = artist { t.artist = a; }
+            let t_album = tag.album().map(|v| clean(&v)).unwrap_or_default();
+            if !t_album.is_empty() { t.album = t_album; }
             t.track = tag.track().unwrap_or(0);
-            t.year = tag.date().map(|d| d.year as u32).unwrap_or(0);
+            if let Some(d) = tag.date() { t.year = d.year as u32; }
             if let Some(pic) = tag.pictures().first() {
                 let art = cache_dir().join("art").join(format!("{id}.img"));
                 if !art.exists() {
@@ -115,7 +165,7 @@ impl Library {
         let mut lib = Library::default();
         // tag cache: re-reading tags is the slow part of a scan, so reuse
         // entries whose size and modified time haven't changed.
-        let cache_file = cache_dir().join("tags.json");
+        let cache_file = cache_dir().join("tags2.json");
         let cache: HashMap<String, Track> = std::fs::read_to_string(&cache_file)
             .ok()
             .and_then(|s| serde_json::from_str::<Vec<Track>>(&s).ok())

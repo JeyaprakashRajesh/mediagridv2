@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// A titled set of collections ("Made for you", "Albums") opened by "View all".
+struct CollectionList: Hashable {
+    let title: String
+    let items: [SongCollection]
+}
+
 /// Something you can open as a list of songs.
 struct SongCollection: Hashable, Identifiable {
     var id: String
@@ -33,6 +39,7 @@ struct MusicView: View {
     @State private var search = ""
     @State private var newPlaylist = false
     @State private var playlistName = ""
+    @State private var allList: CollectionList?
 
     private var greeting: String {
         let h = Calendar.current.component(.hour, from: .now)
@@ -62,6 +69,7 @@ struct MusicView: View {
                 }
             }
             .navigationDestination(for: SongCollection.self) { CollectionView(collection: $0) }
+            .navigationDestination(item: $allList) { AllCollectionsView(list: $0) }
             .refreshable { await music.refresh() }
             .tint(tint.color)
             .alert("New Playlist", isPresented: $newPlaylist) {
@@ -124,7 +132,7 @@ struct MusicView: View {
                     recentSection
                     if !cards.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Made for you")
+                            viewAllHeader("Made for you", CollectionList(title: "Made for you", items: cards))
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(spacing: 14) {
                                     ForEach(cards) { c in
@@ -188,7 +196,7 @@ struct MusicView: View {
                     Circle().stroke(.secondary.opacity(0.3), lineWidth: 2.5)
                     Circle().trim(from: 0, to: Double(music.syncDone) / Double(max(music.syncTotal, 1)))
                         .stroke(tint.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round)).rotationEffect(.degrees(-90))
-                        .animation(.smooth, value: music.syncDone)
+                        .animation(.smooth(duration: 0.2), value: music.syncDone)
                     Image(systemName: "xmark").font(.caption2.weight(.bold))
                 } else {
                     Image(systemName: pending == 0 ? "checkmark.icloud" : "icloud.and.arrow.down")
@@ -306,22 +314,34 @@ struct MusicView: View {
         .buttonStyle(.plain)
     }
 
+    /// "2000s Melody"-style auto playlists first, then the real albums.
+    private var albumCollections: [SongCollection] {
+        music.genreMixes.map { SongCollection(mix: $0) } + music.albums.map { a in
+            SongCollection(id: "al-\(a.name)", title: a.name, subtitle: a.artist, colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first)
+        }
+    }
+
+    private func viewAllHeader(_ title: String, _ list: CollectionList) -> some View {
+        HStack {
+            Text(title).font(.title2.weight(.bold))
+            Spacer()
+            Button { allList = list } label: {
+                HStack(spacing: 3) { Text("View all"); Image(systemName: "chevron.right").font(.caption.weight(.bold)) }
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
     private var albumsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Albums")
+        let all = albumCollections
+        return VStack(alignment: .leading, spacing: 12) {
+            viewAllHeader("Albums", CollectionList(title: "Albums", items: all))
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
-                    ForEach(music.albums.prefix(30)) { a in
-                        NavigationLink(value: SongCollection(id: "al-\(a.name)", title: a.name, subtitle: a.artist,
-                                                             colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first)) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ArtworkView(track: a.tracks.first, size: 140, radius: 16).cardShadow()
-                                Text(a.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                Text(a.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            .frame(width: 140)
-                        }
-                        .buttonStyle(.plain)
+                    ForEach(all.prefix(30)) { c in
+                        NavigationLink(value: c) { CollectionCard(c: c, size: 140) }
+                            .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -618,6 +638,67 @@ extension MusicStore {
         if id.hasPrefix("ar-"), let a = artists.first(where: { "ar-\($0.name)" == id }) {
             return SongCollection(id: id, title: a.name, subtitle: "\(a.tracks.count) songs", colors: [Theme.pick(a.name)], tracks: a.tracks, artTrack: a.tracks.first(where: { $0.has_art }))
         }
-        return mixes.first(where: { $0.id == id }).map { SongCollection(mix: $0) }
+        return (mixes + genreMixes).first(where: { $0.id == id }).map { SongCollection(mix: $0) }
+    }
+}
+
+/// Cover + title for any collection: album art when it has some, otherwise the coloured poster.
+struct CollectionCard: View {
+    let c: SongCollection
+    let size: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if c.artTrack != nil {
+                ArtworkView(track: c.artTrack, size: size, radius: size * 0.12).cardShadow()
+            } else {
+                MixArt(colors: c.colors, tracks: c.tracks, symbol: c.symbol, title: c.title, size: size).cardShadow()
+            }
+            Text(c.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Text(c.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(width: size, alignment: .leading)
+    }
+}
+
+/// "View all": search on top, every collection in a two-column grid.
+struct AllCollectionsView: View {
+    let list: CollectionList
+    @State private var query = ""
+
+    private var items: [SongCollection] {
+        query.isEmpty ? list.items : list.items.filter { "\($0.title) \($0.subtitle)".localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        GeometryReader { g in
+            let w = (g.size.width - 20 * 2 - 14) / 2
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search \(list.title.lowercased())", text: $query)
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .glassEffect(.regular, in: .capsule)
+                .padding(.horizontal, 20)
+
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.fixed(w), spacing: 14), GridItem(.fixed(w))], spacing: 18) {
+                        ForEach(items) { c in
+                            NavigationLink(value: c) { CollectionCard(c: c, size: w) }.buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20).padding(.bottom, 60)
+                    if items.isEmpty { ContentUnavailableView.search }
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+        }
+        .background(Theme.ink.ignoresSafeArea())
+        .navigationTitle(list.title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

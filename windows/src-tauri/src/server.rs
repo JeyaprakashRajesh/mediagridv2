@@ -55,6 +55,7 @@ pub async fn run(app: Shared) {
         .route("/api/files/raw", get(files_raw))
         .route("/api/files/thumb", get(files_thumb))
         .route("/api/files/upload", post(files_upload))
+        .route("/api/music/upload", post(music_upload))
         .route("/api/clipboard", get(clip_get).post(clip_set))
         .route("/api/shared", get(shared_list))
         .route("/api/shared/text", post(shared_text))
@@ -186,8 +187,49 @@ async fn me(State(app): State<Shared>) -> Json<Value> {
     }))
 }
 
-async fn tracks(State(app): State<Shared>) -> Json<Value> {
-    Json(json!(app.lib.read().tracks))
+/// One copy per song: when the same song exists in several qualities, only the best one (lossless, then bitrate) is offered.
+/// Streaming and downloads always serve the original file, never a transcode.
+async fn tracks(State(app): State<Shared>, Query(q): Q) -> Json<Value> {
+    let l = app.lib.read();
+    let want_pop = q.get("pop").map(|s| s.as_str()) == Some("1");
+    let rank = |t: &library::Track| -> (u8, u64) {
+        let r = match t.ext.to_lowercase().as_str() {
+            "flac" | "wav" | "aiff" | "aif" | "alac" => 3,
+            "m4a" | "aac" | "ogg" | "opus" => 2,
+            _ => 1,
+        };
+        (r, if t.duration > 0.0 { (t.size as f64 / t.duration) as u64 } else { 0 })
+    };
+    let mut best: std::collections::HashMap<(String, String, i64), &library::Track> = std::collections::HashMap::new();
+    for t in &l.tracks {
+        let key = (t.title.to_lowercase(), t.artist.to_lowercase(), (t.duration / 4.0).round() as i64);
+        best.entry(key).and_modify(|b| if rank(t) > rank(*b) { *b = t }).or_insert(t);
+    }
+    let keep: std::collections::HashSet<&str> = best.values().map(|t| t.id.as_str()).collect();
+    if want_pop {
+        // the phone uses internet popularity: fill in songs we have no rank for (background, throttled)
+        let todo = l.tracks.iter().filter(|t| keep.contains(t.id.as_str())).map(|t| (t.id.clone(), t.artist.clone(), t.title.clone())).collect();
+        crate::popularity::fetch_missing(todo);
+    }
+    // bpm / energy / punch come from the audio analysis (genre.rs) once it has reached a song
+    let v: Vec<Value> = l
+        .tracks
+        .iter()
+        .filter(|t| keep.contains(t.id.as_str()))
+        .map(|t| {
+            let mut j = json!(t);
+            if let Some(f) = crate::genre::get(&t.id) {
+                j["bpm"] = json!(f[0]);
+                j["energy"] = json!(f[1]);
+                j["punch"] = json!(f[2]);
+            }
+            if want_pop {
+                if let Some(r) = crate::popularity::get(&t.id) { j["rank"] = json!(r); }
+            }
+            j
+        })
+        .collect();
+    Json(json!(v))
 }
 
 /// MIME types iOS's AVPlayer recognises (mime_guess gives e.g. "audio/m4a", which it rejects).
@@ -407,6 +449,28 @@ async fn files_upload(Query(q): Q, body: Body) -> Response {
     let p = unique_path(Path::new(dir), name);
     match write_body(&p, body).await {
         Ok(n) => Json(json!({ "ok": true, "path": p.to_string_lossy(), "size": n })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+/// Songs sent from the iPhone land in "<first music folder>/From iPhone" and are scanned into the library.
+async fn music_upload(State(app): State<Shared>, Query(q): Q, body: Body) -> Response {
+    let Some(name) = q.get("name").and_then(|n| Path::new(n).file_name().map(|f| f.to_string_lossy().to_string())) else {
+        return err(StatusCode::BAD_REQUEST, "name");
+    };
+    let ext = Path::new(&name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !["mp3", "m4a", "aac", "flac", "wav", "aiff", "aif", "ogg", "opus", "wma", "alac"].contains(&ext.as_str()) {
+        return err(StatusCode::UNSUPPORTED_MEDIA_TYPE, "not an audio file");
+    }
+    let Some(base) = app.cfg.read().music_dirs.first().cloned() else { return err(StatusCode::CONFLICT, "no music folder set on the PC") };
+    let dir = Path::new(&base).join("From iPhone");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await { return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
+    let p = unique_path(&dir, &name);
+    match write_body(&p, body).await {
+        Ok(n) => {
+            if q.get("rescan").map(|s| s.as_str()) != Some("0") { app.rescan(); }
+            Json(json!({ "ok": true, "size": n })).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }

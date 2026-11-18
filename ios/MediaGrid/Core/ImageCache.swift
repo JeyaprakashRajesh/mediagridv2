@@ -95,7 +95,7 @@ struct RemoteImage<Placeholder: View>: View {
         ZStack {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
-                    .transition(.opacity.animation(.easeOut(duration: 0.25)))
+                    .transition(.opacity.animation(.easeOut(duration: 0.15)))
             } else {
                 placeholder()
             }

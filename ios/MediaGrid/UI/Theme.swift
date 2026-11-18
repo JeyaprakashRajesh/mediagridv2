@@ -36,7 +36,7 @@ enum Theme {
             u.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
             target = Color(hue: h, saturation: min(max(s, 0.5), 0.85), brightness: min(max(b, 0.5), 0.76))
         }
-        withAnimation(.easeInOut(duration: 1.0)) { color = target }
+        withAnimation(.easeInOut(duration: 0.6)) { color = target }
     }
 }
 

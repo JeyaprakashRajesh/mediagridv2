@@ -117,7 +117,7 @@ struct SharedView: View {
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 440, alignment: .top)
         .glassEffect(.regular, in: .rect(cornerRadius: 30))
-        .animation(.spring(duration: 0.4), value: items.map(\.id))
+        .animation(.spring(duration: 0.25), value: items.map(\.id))
     }
 
     private func open(_ i: SharedItem) {

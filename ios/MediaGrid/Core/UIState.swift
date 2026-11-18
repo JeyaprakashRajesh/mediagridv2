@@ -8,8 +8,8 @@ final class UIState: ObservableObject {
     @Published var showPlayer = false
     @Published var musicPath: [SongCollection] = []
 
-    func openPlayer() { withAnimation(.smooth(duration: 0.4)) { showPlayer = true } }
-    func closePlayer() { withAnimation(.smooth(duration: 0.4)) { showPlayer = false } }
+    func openPlayer() { withAnimation(.smooth(duration: 0.25)) { showPlayer = true } }
+    func closePlayer() { withAnimation(.smooth(duration: 0.25)) { showPlayer = false } }
     func goTo(_ c: SongCollection) {
         closePlayer()
         tab = .music

@@ -93,7 +93,7 @@ struct OnboardingView: View {
             conn.startDiscovery()
             if host.isEmpty { host = conn.host }
             if email.isEmpty { email = conn.email }
-            withAnimation(.spring(duration: 0.9).delay(0.1)) { appear = true }
+            withAnimation(.spring(duration: 0.5).delay(0.1)) { appear = true }
         }
         .onChange(of: conn.discovered) { _, d in
             if host.isEmpty, let first = d.first { host = "\(first.host):\(first.port)" }

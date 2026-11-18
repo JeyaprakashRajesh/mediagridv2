@@ -1,7 +1,9 @@
 mod clip;
 mod config;
 mod control;
+mod genre;
 mod library;
+mod popularity;
 mod server;
 mod state;
 

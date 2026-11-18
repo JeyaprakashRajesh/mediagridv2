@@ -20,7 +20,7 @@ struct RootView: View {
                 tabs.transition(.opacity)
             }
         }
-        .animation(.smooth(duration: 0.5), value: conn.state == .signedOut)
+        .animation(.smooth(duration: 0.3), value: conn.state == .signedOut)
         .overlay(alignment: .top) {
             if let b = coord.banner {
                 Label(b, systemImage: "checkmark.circle.fill")
@@ -31,7 +31,7 @@ struct RootView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(duration: 0.45), value: coord.banner)
+        .animation(.spring(duration: 0.3), value: coord.banner)
         .alert("Your PC is looking for this iPhone", isPresented: $coord.findMe) {
             Button("Found it") { coord.stopRinging() }
         }

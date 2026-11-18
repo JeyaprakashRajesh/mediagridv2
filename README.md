@@ -151,10 +151,11 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `GET /api/ping` | `{app, name, version, account}` — discovery/health |
 | `POST /api/login` `{email,password,device}` | → `{token, name}` |
 | `GET /api/me` | PC name, counts, toggles |
-| `GET /api/music/tracks` | all tracks (`id,title,artist,album,duration,size,ext,added,track,year,has_art`) |
+| `GET /api/music/tracks` | all tracks (`id,title,artist,album,duration,size,ext,added,track,year,has_art`, plus `bpm,energy,punch` once the PC's audio analysis has reached the song; `?pop=1` also adds `rank` (Deezer popularity, looked up in the background and stored in `popularity.json`); duplicates of one song are collapsed to the best quality) |
 | `GET /api/music/stream/{id}` | audio, supports `Range` |
 | `GET /api/music/art/{id}` | embedded cover |
 | `POST /api/rescan` | rescan library |
+| `POST /api/music/upload?name=…[&rescan=0]` | body = audio file; saved to `<music folder>/From iPhone`, then rescanned |
 | `GET /api/media/items?kind=photo\|video` | PC media list |
 | `GET /api/media/file/{id}` / `thumb/{id}?s=360` | original (Range) / JPEG thumbnail |
 | `GET /api/files/list?path=&hidden=0` | explorer (`path` empty → places & drives) |

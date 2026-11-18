@@ -264,6 +264,8 @@ impl App {
             let lib = Library::scan(&m, &d, &p);
             let (nt, nm) = (lib.tracks.len(), lib.media.len());
             *me.lib.write() = lib;
+            let todo: Vec<(String, String)> = me.lib.read().tracks.iter().map(|t| (t.id.clone(), t.path.clone())).collect();
+            crate::genre::analyze_missing(todo);
             me.ui("scan", serde_json::json!({ "scanning": false, "tracks": nt, "media": nm }));
             me.push(serde_json::json!({ "event": "library", "tracks": nt, "media": nm }));
             if me.rescan_pending.swap(false, Ordering::SeqCst) {

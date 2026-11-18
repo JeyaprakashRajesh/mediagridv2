@@ -12,6 +12,12 @@ struct Track: Codable, Identifiable, Hashable {
     var track: Int
     var year: Int
     var has_art: Bool
+    // audio analysis from the PC (nil until it has reached this song) and the label derived from it
+    var bpm: Double? = nil
+    var energy: Double? = nil
+    var punch: Double? = nil
+    var rank: Int? = nil          // internet popularity (Deezer rank), only when the PC has looked it up
+    var genre: String? = nil
 
     var addedDate: Date { Date(timeIntervalSince1970: TimeInterval(added) / 1000) }
 }

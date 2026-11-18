@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ProfileView: View {
     @EnvironmentObject var conn: Connection
@@ -9,9 +10,13 @@ struct ProfileView: View {
     @EnvironmentObject var player: Player
     @AppStorage("mg.liveActivity") private var liveActivity = true
     @AppStorage("mg.appearance") private var appearance = 0
+    @AppStorage("mg.autoplayGenre") private var autoplayGenre = true
+    @AppStorage("mg.rankMethod") private var rankMethod = 0
     @State private var editingHost = false
     @State private var newHost = ""
     @State private var confirmSignOut = false
+    @State private var pickingMusic = false
+    @State private var uploadStatus: String?
 
     var body: some View {
         NavigationStack {
@@ -22,6 +27,7 @@ struct ProfileView: View {
                         header
                         connectionSection
                         backupSection
+                        musicSection
                         preferencesSection
                         storageSection
                         Button(role: .destructive) { confirmSignOut = true } label: {
@@ -36,6 +42,9 @@ struct ProfileView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .fileImporter(isPresented: $pickingMusic, allowedContentTypes: [.audio], allowsMultipleSelection: true) { r in
+                if case .success(let urls) = r, !urls.isEmpty { uploadSongs(urls) }
+            }
             .confirmationDialog("Sign out of MediaGrid?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { conn.signOut() }
             } message: { Text("Downloaded music stays on your iPhone.") }
@@ -142,6 +151,38 @@ struct ProfileView: View {
         }
     }
 
+    /// Pick one song or many; they are copied to the PC's music folder as the original files.
+    private var musicSection: some View {
+        section("Music") {
+            Button { pickingMusic = true } label: {
+                row("square.and.arrow.up", Theme.accent, "Upload songs to PC") {
+                    if uploadStatus != nil { ProgressView() } else { Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary) }
+                }
+            }
+            .buttonStyle(.plain).disabled(conn.state != .online || uploadStatus != nil)
+            Text(uploadStatus ?? "Choose one or several audio files. They are saved in your PC's music folder.")
+                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.bottom, 10)
+        }
+    }
+
+    private func uploadSongs(_ urls: [URL]) {
+        Task {
+            var done = 0
+            for (i, u) in urls.enumerated() {
+                uploadStatus = "Uploading \(i + 1) of \(urls.count)…"
+                let ok = u.startAccessingSecurityScopedResource()
+                defer { if ok { u.stopAccessingSecurityScopedResource() } }
+                do { try await conn.upload("/api/music/upload", query: ["name": u.lastPathComponent, "rescan": "0"], file: u); done += 1 } catch {}
+            }
+            try? await conn.post("/api/rescan", json: [String: String]())
+            uploadStatus = nil
+            Coordinator.shared.show(done == urls.count ? "Uploaded \(done) song\(done == 1 ? "" : "s")" : "Uploaded \(done) of \(urls.count)")
+            Haptics.success()
+            try? await Task.sleep(for: .seconds(2))
+            await music.refresh()
+        }
+    }
+
     private var preferencesSection: some View {
         section("Preferences") {
             row("circle.lefthalf.filled", Theme.accent, "Appearance") {
@@ -153,6 +194,14 @@ struct ProfileView: View {
             toggleRow("doc.on.clipboard", Theme.cyan, "Universal clipboard", $clip.auto)
             toggleRow("platter.filled.top.iphone", Theme.pink, "Dynamic Island & Lock Screen", $liveActivity)
             toggleRow("shuffle", Theme.mint, "Shuffle by default", $player.shuffle)
+            toggleRow("dot.radiowaves.left.and.right", Theme.accent, "Autoplay similar songs", $autoplayGenre)
+            row("chart.bar.fill", Theme.cyan, "Song ranking") {
+                Picker("Song ranking", selection: $rankMethod) {
+                    Text("Both").tag(0); Text("My plays").tag(1); Text("Popularity").tag(2)
+                }
+                .pickerStyle(.menu).tint(.secondary)
+                .onChange(of: rankMethod) { _, _ in Task { await music.refresh() } }
+            }
         }
     }
 

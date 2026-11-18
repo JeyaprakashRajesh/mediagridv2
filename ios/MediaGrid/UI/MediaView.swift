@@ -44,7 +44,7 @@ struct MediaView: View {
                             Text("Media").font(.largeTitle.weight(.bold)).lineLimit(1)
                             Spacer(minLength: 8)
                             Menu {
-                                Picker("Grid", selection: $columns.animation(.smooth)) {
+                                Picker("Grid", selection: $columns.animation(.smooth(duration: 0.2))) {
                                     Label("Large", systemImage: "square.grid.2x2").tag(2)
                                     Label("Medium", systemImage: "square.grid.3x3").tag(3)
                                     Label("Small", systemImage: "square.grid.4x3.fill").tag(5)
@@ -59,7 +59,7 @@ struct MediaView: View {
                         }
                         .padding(.horizontal, 20).padding(.top, 6)
 
-                        Picker("Filter", selection: $filter.animation(.smooth)) {
+                        Picker("Filter", selection: $filter.animation(.smooth(duration: 0.2))) {
                             Text("All").tag(0); Text("Photos").tag(1); Text("Videos").tag(2); Text("iPhone").tag(3)
                         }
                         .pickerStyle(.segmented)

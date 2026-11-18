@@ -14,7 +14,7 @@ struct MiniPlayer: View {
             if let t = player.current {
                 ArtworkView(track: t, size: placement == .inline ? 28 : 36, radius: 8)
                     .scaleEffect(player.isPlaying ? 1 : 0.92)
-                    .animation(.spring(duration: 0.4), value: player.isPlaying)
+                    .animation(.spring(duration: 0.25), value: player.isPlaying)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     if placement != .inline {
@@ -54,7 +54,7 @@ struct MiniPlayer: View {
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
         .onTapGesture { if player.current != nil { open() } }
-        .animation(.smooth, value: player.current?.id)
+        .animation(.smooth(duration: 0.2), value: player.current?.id)
     }
 }
 
@@ -90,7 +90,7 @@ struct NowPlayingView: View {
                         .scaleEffect(player.isPlaying ? 1 : 0.88)
                         .shadow(color: .black.opacity(0.5), radius: player.isPlaying ? 36 : 16, y: 18)
                         .frame(width: g.size.width, height: g.size.height)
-                        .animation(.spring(duration: 0.6, bounce: 0.3), value: player.isPlaying)
+                        .animation(.spring(duration: 0.35, bounce: 0.2), value: player.isPlaying)
                         .id(t?.id)
                         .transition(.asymmetric(insertion: .scale(scale: 0.9).combined(with: .opacity), removal: .opacity))
                 }
@@ -202,7 +202,7 @@ struct NowPlayingView: View {
         .gesture(DragGesture(minimumDistance: 24).onEnded { v in
             if v.translation.width > 90, abs(v.translation.height) < 80 { onClose() }   // swipe right = back
         })
-        .animation(.smooth(duration: 0.45), value: t?.id)
+        .animation(.smooth(duration: 0.28), value: t?.id)
     }
 
     private var header: some View {

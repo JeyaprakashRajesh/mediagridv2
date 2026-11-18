@@ -42,6 +42,7 @@ final class MusicStore: ObservableObject {
     @Published var liked: Set<String> = []
     @Published var playCounts: [String: Int] = [:]
     @Published var lastPlayed: [String: Double] = [:]
+    @Published var skips: [String: Int] = [:]
     @Published var serverRecent: [RecentEntry] = []
     @Published var playlists: [UserPlaylist] = []
     @Published var loading = false
@@ -73,21 +74,25 @@ final class MusicStore: ObservableObject {
         var playCounts: [String: Int] = [:]
         var lastPlayed: [String: Double] = [:]
         var playlists: [UserPlaylist] = []
+        var skips: [String: Int]? = nil
     }
 
     private func loadLocal() {
-        if let d = try? Data(contentsOf: cacheURL), let t = try? JSONDecoder().decode([Track].self, from: d) { tracks = t }
+        if let d = try? Data(contentsOf: cacheURL), let t = try? JSONDecoder().decode([Track].self, from: d) { tracks = Self.prepare(t) }
         if let d = try? Data(contentsOf: stateURL), let s = try? JSONDecoder().decode(State.self, from: d) {
-            liked = Set(s.liked); playCounts = s.playCounts; lastPlayed = s.lastPlayed; playlists = s.playlists
+            liked = Set(s.liked); playCounts = s.playCounts; lastPlayed = s.lastPlayed; playlists = s.playlists; skips = s.skips ?? [:]
         }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: musicDir.path)) ?? []
         downloaded = Set(files.filter { !$0.hasSuffix(".part") }.map { ($0 as NSString).deletingPathExtension })
     }
 
     func saveState() {
-        let s = State(liked: Array(liked), playCounts: playCounts, lastPlayed: lastPlayed, playlists: playlists)
+        let s = State(liked: Array(liked), playCounts: playCounts, lastPlayed: lastPlayed, playlists: playlists, skips: skips)
         if let d = try? JSONEncoder().encode(s) { try? d.write(to: stateURL, options: .atomic) }
     }
+
+    /// One name per artist, plus an auto genre for every analysed song.
+    static func prepare(_ t: [Track]) -> [Track] { Genres.classify(ArtistNames.canonicalize(t)) }
 
     // MARK: server
 
@@ -96,8 +101,9 @@ final class MusicStore: ObservableObject {
         loading = true
         defer { loading = false }
         do {
-            let t: [Track] = try await Connection.shared.get("/api/music/tracks")
-            tracks = t
+            // asking for popularity makes the PC look songs up in the background; plain listening mode costs no extra network
+            let t: [Track] = try await Connection.shared.get("/api/music/tracks", query: rankMethod == 1 ? [:] : ["pop": "1"])
+            tracks = Self.prepare(t)
             if let d = try? JSONEncoder().encode(t) { try? d.write(to: cacheURL, options: .atomic) }
             lastError = nil
             await refreshPlayback()
@@ -284,14 +290,72 @@ final class MusicStore: ObservableObject {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// A song with several artists appears under each of them.
     var artists: [TrackGroup] {
-        Dictionary(grouping: tracks, by: { $0.artist })
-            .map { TrackGroup(name: $0.key, artist: $0.key, tracks: $0.value) }
-            .sorted { $0.tracks.count > $1.tracks.count }
+        var d: [String: [Track]] = [:]
+        for t in tracks { for n in ArtistNames.split(t.artist) { d[n, default: []].append(t) } }
+        return d.map { TrackGroup(name: $0.key, artist: $0.key, tracks: $0.value) }.sorted { $0.tracks.count > $1.tracks.count }
+    }
+
+    // MARK: popularity
+
+    /// Skipped within the first 20 seconds: a vote against the song.
+    func noteSkipped(_ t: Track) { skips[t.id, default: 0] += 1; saveState() }
+
+    /// How songs are ranked (Profile > Preferences): 0 = both, 1 = my plays only, 2 = internet popularity only.
+    var rankMethod: Int { UserDefaults.standard.integer(forKey: "mg.rankMethod") }
+
+    private var scoreCache: (key: Int, map: [String: Double])?
+
+    /// One score per song, used to rank mix fillers and autoplay picks.
+    ///  * listening: plays (diminishing), likes, kept offline, recency, album in rotation, lead songs, skips
+    ///  * internet: Deezer rank on a log scale (the PC looks it up once per song and stores it)
+    ///  * freshness (always on): songs heard in the last days lose points, so the same favourites don't come back again and again
+    /// Cached for an hour per library state, so repeated calls are cheap.
+    func popularityScores() -> [String: Double] {
+        let method = rankMethod
+        let hour = Int(Date().timeIntervalSince1970 / 3600)
+        var h = Hasher()
+        h.combine(tracks.count); h.combine(playCounts.count); h.combine(liked.count); h.combine(downloaded.count)
+        h.combine(skips.count); h.combine(method); h.combine(hour); h.combine(lastPlayed.count)
+        let key = h.finalize()
+        if let c = scoreCache, c.key == key { return c.map }
+
+        let now = Date().timeIntervalSince1970
+        let thisYear = Calendar.current.component(.year, from: .now)
+        var albumPlays: [String: Int] = [:]
+        for t in tracks { albumPlays[t.album, default: 0] += playCounts[t.id] ?? 0 }
+        var out: [String: Double] = [:]
+        out.reserveCapacity(tracks.count)
+        for t in tracks {
+            var listening = log1p(Double(playCounts[t.id] ?? 0)) * 2
+            if liked.contains(t.id) { listening += 3 }
+            if downloaded.contains(t.id) { listening += 1 }
+            if let lp = lastPlayed[t.id] { listening += max(0, 1.5 - (now - lp) / 86400 / 30) }
+            listening += min(1.5, log1p(Double(albumPlays[t.album] ?? 0)) * 0.4)
+            listening -= Double(skips[t.id] ?? 0)
+
+            var internet = 0.0
+            if let r = t.rank, r > 0 { internet = min(1, max(0, log10(Double(r)) / 6)) * 8 }
+
+            var s = method == 1 ? listening : method == 2 ? internet : listening + internet
+            if t.track > 0 && t.track <= 3 { s += 0.7 }
+            if t.year >= thisYear - 1 { s += 0.5 }
+            if let lp = lastPlayed[t.id] {                          // freshness: don't repeat what you just heard
+                let days = (now - lp) / 86400
+                s -= days < 1 ? 6 : days < 3 ? 3 : days < 7 ? 1.5 : 0
+            }
+            out[t.id] = s
+        }
+        scoreCache = (key, out)
+        return out
     }
 
     // MARK: smart mixes
 
+
+    /// Made for you: Liked Songs, Recently Added and up to four Daily Mixes of at most 100 shuffled songs
+    /// (the same all day). "All Songs" is added by the view.
     var mixes: [SmartMix] {
         guard !tracks.isEmpty else { return [] }
         let day = UInt64(Date().timeIntervalSince1970 / 86400)
@@ -307,51 +371,46 @@ final class MusicStore: ObservableObject {
         out.append(SmartMix(id: "recent", title: "Recently Added", subtitle: "Fresh in your library", symbol: "sparkles",
                             colors: [Color(hex: 0xC8601A)], tracks: Array(recent)))
 
-        let played = tracks.filter { (playCounts[$0.id] ?? 0) > 0 }.sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
-        if played.count >= 5 {
-            out.append(SmartMix(id: "repeat", title: "On Repeat", subtitle: "Songs you can't stop playing", symbol: "repeat",
-                                colors: [Color(hex: 0x0E8077)], tracks: Array(played.prefix(50))))
+        // Daily mixes: built around the artists you play most, topped up with random songs to 100
+        var score: [String: Int] = [:]
+        for t in tracks {
+            for n in ArtistNames.split(t.artist) { score[n, default: 0] += 1 + (playCounts[t.id] ?? 0) * 3 + (liked.contains(t.id) ? 5 : 0) }
         }
-
-        // Daily mixes: built around your most played (or biggest) artists
-        let artistScore = Dictionary(grouping: tracks, by: { $0.artist }).mapValues { ts in
-            ts.reduce(0) { $0 + (playCounts[$1.id] ?? 0) * 3 + (liked.contains($1.id) ? 5 : 0) } + ts.count
-        }
-        let topArtists = artistScore.sorted { $0.value > $1.value }.map(\.key).filter { $0 != "Unknown Artist" }
-        let palettes: [[Color]] = [[Color(hex: 0x7345C9)], [Color(hex: 0x2F8F5B)], [Color(hex: 0xB4541E)], [Color(hex: 0x9A3F9A)]]
+        let topArtists = score.sorted { $0.value > $1.value }.map(\.key).filter { $0 != "Unknown Artist" }
+        let palettes = [Color(hex: 0x7345C9), Color(hex: 0x2F8F5B), Color(hex: 0xB4541E), Color(hex: 0x9A3F9A)]
+        let scores = popularityScores()
         var used = Set<String>()
         var mixNo = 1
         for (i, a) in topArtists.enumerated() where mixNo <= 4 && !used.contains(a) {
             let seeds = [a] + topArtists.dropFirst(i + 1).filter { !used.contains($0) }.prefix(2)
             seeds.forEach { used.insert($0) }
-            var picks = tracks.filter { seeds.contains($0.artist) }
-            let fill = tracks.filter { !seeds.contains($0.artist) }.shuffled(using: &rng).prefix(max(0, 30 - picks.count) / 2)
-            picks.append(contentsOf: fill)
+            var picks = tracks.filter { t in ArtistNames.split(t.artist).contains { seeds.contains($0) } }
+            func best(_ ts: [Track], _ n: Int) -> [Track] {   // popular first, with some daily variety
+                ts.map { ($0, (scores[$0.id] ?? 0) + Double.random(in: 0..<2, using: &rng)) }.sorted { $0.1 > $1.1 }.prefix(n).map(\.0)
+            }
+            if picks.count > 100 { picks = best(picks, 100) }
+            let have = Set(picks.map(\.id))
+            picks.append(contentsOf: best(tracks.filter { !have.contains($0.id) }, 100 - picks.count))
             guard picks.count >= 6 else { continue }
             out.append(SmartMix(id: "daily\(mixNo)", title: "Daily Mix \(mixNo)", subtitle: seeds.joined(separator: ", "),
-                                symbol: "dial.medium", colors: palettes[(mixNo - 1) % palettes.count], tracks: picks.shuffled(using: &rng)))
+                                symbol: "dial.medium", colors: [palettes[(mixNo - 1) % palettes.count]], tracks: picks.shuffled(using: &rng)))
             mixNo += 1
         }
+        return out
+    }
 
-        let rediscover = tracks.filter { (playCounts[$0.id] ?? 0) == 0 }.shuffled(using: &rng).prefix(40)
-        if rediscover.count >= 5 {
-            out.append(SmartMix(id: "discover", title: "Discover Weekly", subtitle: "Songs you haven't played yet", symbol: "safari",
-                                colors: [Color(hex: 0x5D7F2E)], tracks: Array(rediscover)))
-        }
-        let offline = tracks.filter { downloaded.contains($0.id) }
-        if !offline.isEmpty {
-            out.append(SmartMix(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill",
-                                colors: [Color(hex: 0x2F8F5B)], tracks: offline))
-        }
-        let long = tracks.filter { $0.duration > 270 }.shuffled(using: &rng).prefix(50)
-        if long.count >= 5 {
-            out.append(SmartMix(id: "drive", title: "Long Drive", subtitle: "Settle in", symbol: "car.fill",
-                                colors: [Color(hex: 0x9A5A17)], tracks: Array(long)))
-        }
-        let quick = tracks.filter { $0.duration > 0 && $0.duration < 200 }.shuffled(using: &rng).prefix(50)
-        if quick.count >= 5 {
-            out.append(SmartMix(id: "quick", title: "Quick Hits", subtitle: "Short & sweet", symbol: "bolt.fill",
-                                colors: [Color(hex: 0xB02A4E)], tracks: Array(quick)))
+    /// Auto playlists from the audio analysis: per decade "2000s Melody", "2010s Dance"..., then the plain genre ("Melody").
+    var genreMixes: [SmartMix] {
+        let g = tracks.filter { $0.genre != nil }
+        guard !g.isEmpty else { return [] }
+        var out: [SmartMix] = []
+        for (genre, ts) in Dictionary(grouping: g, by: { $0.genre ?? "" }).sorted(by: { $0.value.count > $1.value.count }) where ts.count >= 6 {
+            let symbol = Genres.symbols[genre] ?? "music.note"
+            for (dec, dts) in Dictionary(grouping: ts.filter { $0.year >= 1950 }, by: { $0.year / 10 * 10 }).sorted(by: { $0.key > $1.key }) where dts.count >= 5 {
+                out.append(SmartMix(id: "genre-\(genre)-\(dec)", title: "\(dec)s \(genre)", subtitle: "\(dts.count) songs", symbol: symbol,
+                                    colors: [Theme.pick("\(dec)\(genre)")], tracks: dts))
+            }
+            out.append(SmartMix(id: "genre-\(genre)", title: genre, subtitle: "\(ts.count) songs", symbol: symbol, colors: [Theme.pick(genre)], tracks: ts))
         }
         return out
     }
