@@ -112,13 +112,6 @@ extension Date {
 }
 
 extension View {
-    func trackScrollDirection() -> some View {
-        onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { old, new in
-            guard abs(new - old) > 3 else { return }
-            MainActor.assumeIsolated {
-                let up = new < old
-                if TabChrome.shared.scrollingUp != up { TabChrome.shared.scrollingUp = up }
-            }
-        }
-    }
+    /// No-op: the tab bar uses the system `.onScrollDown` minimise behaviour again.
+    func trackScrollDirection() -> some View { self }
 }

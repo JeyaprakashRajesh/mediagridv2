@@ -165,6 +165,7 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `POST /api/control` | same JSON as WS control messages |
 | `GET /api/screen?w=1280&q=60` | JPEG screenshot |
 | `GET/POST /api/playback` | shared now-playing + recently played `{recent:[{id,at,pos,device}], now}`; POST `{id,pos,playing,device}`; pushes `playback` event |
+| `GET/POST /api/playlists` | user playlists `[{id,name,trackIDs}]` shared by all devices (last writer wins); pushes `playlists` event |
 | `GET /api/devices`, `POST /api/phone` | paired phones; send command to phone |
 | `GET /ws?t=` | WebSocket |
 

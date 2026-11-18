@@ -40,24 +40,17 @@ struct MusicView: View {
         NavigationStack {
             ZStack {
                 AppBackground()
-                if !search.isEmpty {
-                    SongList(tracks: searchResults, source: "Search")
-                } else {
-                    home
+                VStack(spacing: 12) {
+                    header
+                    searchField
+                    if !search.isEmpty {
+                        SongList(tracks: searchResults, source: "Search")
+                    } else {
+                        home
+                    }
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Songs, artists, albums")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Text(greeting).font(.title2.weight(.bold))
-                }
-                ToolbarItem(placement: .topBarTrailing) { syncButton }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { player.shuffleAll(); Haptics.soft() } label: { Image(systemName: "shuffle") }
-                        .disabled(music.tracks.isEmpty)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: SongCollection.self) { CollectionView(collection: $0) }
             .refreshable { await music.refresh() }
             .alert("New Playlist", isPresented: $newPlaylist) {
@@ -66,6 +59,32 @@ struct MusicView: View {
                 Button("Cancel", role: .cancel) { playlistName = "" }
             }
         }
+    }
+
+    /// Greeting on the left; sync + shuffle on the right of the same row.
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text(greeting).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.6)
+            Spacer(minLength: 8)
+            syncButton.frame(width: 46, height: 46).glassEffect(.regular.interactive(), in: .circle)
+            Button { player.shuffleAll(); Haptics.soft() } label: { Image(systemName: "shuffle").frame(width: 46, height: 46) }
+                .glassEffect(.regular.interactive(), in: .circle)
+                .disabled(music.tracks.isEmpty)
+        }
+        .padding(.horizontal, 20).padding(.top, 6)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Songs, artists, albums", text: $search).submitLabel(.search)
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.horizontal, 20)
     }
 
     private var searchResults: [Track] {
@@ -81,7 +100,6 @@ struct MusicView: View {
                 } else {
                     let mixes = music.mixes
                     recentSection
-                    playlistsSection
                     if mixes.count > 1 {
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "Made for you")
@@ -97,6 +115,7 @@ struct MusicView: View {
                             .scrollTargetBehavior(.viewAligned)
                         }
                     }
+                    playlistsSection
                     albumsSection
                     artistsSection
                     NavigationLink(value: SongCollection(id: "all", title: "All Songs", subtitle: "\(music.tracks.count) songs",
@@ -161,7 +180,7 @@ struct MusicView: View {
         .accessibilityLabel(music.syncing ? "Stop sync" : "Sync \(pending) songs for offline")
     }
 
-    /// "Continue where you left off": artwork on the left, details on the right.
+    /// "Continue where you left off": one big full-width card per song, swipe for older ones.
     @ViewBuilder private var recentSection: some View {
         let recent = music.recentlyPlayed
         if !recent.isEmpty {
@@ -172,26 +191,31 @@ struct MusicView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(recent, id: \.track.id) { item in
                             Button { player.playRecent(item.track, in: list, pos: item.pos); Haptics.tap() } label: {
-                                HStack(spacing: 12) {
-                                    ArtworkView(track: item.track, size: 64, radius: 14)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                        Text(item.track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                        Label(item.at.relative, systemImage: "clock").font(.caption2).foregroundStyle(.tertiary)
+                                HStack(spacing: 16) {
+                                    ArtworkView(track: item.track, size: 116, radius: 22).cardShadow()
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(item.track.title).font(.title3.weight(.bold)).lineLimit(2)
+                                        Text(item.track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                        Label(item.pos > 3 ? "\(item.at.relative) · resume \(item.pos.mmss)" : item.at.relative, systemImage: "clock")
+                                            .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                                     }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: player.current?.id == item.track.id && player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.title).foregroundStyle(Theme.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    Image(systemName: player.current?.id == item.track.id && player.isPlaying ? "pause.fill" : "play.fill")
+                                        .font(.title2).foregroundStyle(.white)
+                                        .frame(width: 58, height: 58)
+                                        .background(Theme.accent, in: .circle)
                                 }
-                                .padding(10)
-                                .frame(width: 290)
-                                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+                                .padding(14)
+                                .containerRelativeFrame(.horizontal) { w, _ in w - 40 }
+                                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 30))
                             }
                             .buttonStyle(.plain)
                         }
                     }
+                    .scrollTargetLayout()
                     .padding(.horizontal, 20)
                 }
+                .scrollTargetBehavior(.viewAligned)
             }
         }
     }

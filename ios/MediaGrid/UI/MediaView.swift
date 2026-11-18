@@ -40,6 +40,25 @@ struct MediaView: View {
                 AppBackground()
                 ScrollView {
                     VStack(spacing: 16) {
+                        HStack(spacing: 10) {
+                            Text("Media").font(.largeTitle.weight(.bold)).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Menu {
+                                Picker("Grid", selection: $columns.animation(.smooth)) {
+                                    Label("Large", systemImage: "square.grid.2x2").tag(2)
+                                    Label("Medium", systemImage: "square.grid.3x3").tag(3)
+                                    Label("Small", systemImage: "square.grid.4x3.fill").tag(5)
+                                }
+                            } label: { Image(systemName: "square.grid.2x2").frame(width: 46, height: 46) }
+                                .glassEffect(.regular.interactive(), in: .circle)
+                            Button { media.syncAll(list); Haptics.tap() } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: media.syncing).frame(width: 46, height: 46)
+                            }
+                            .glassEffect(.regular.interactive(), in: .circle)
+                            .disabled(media.syncing || conn.state != .online || filter == 3)
+                        }
+                        .padding(.horizontal, 20).padding(.top, 6)
+
                         Picker("Filter", selection: $filter.animation(.smooth)) {
                             Text("All").tag(0); Text("Photos").tag(1); Text("Videos").tag(2); Text("iPhone").tag(3)
                         }
@@ -91,23 +110,7 @@ struct MediaView: View {
                 .refreshable { await media.refresh() }
                 .trackScrollDirection()
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Text("Media").font(.title2.weight(.bold)) }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("Grid", selection: $columns.animation(.smooth)) {
-                            Label("Large", systemImage: "square.grid.2x2").tag(2)
-                            Label("Medium", systemImage: "square.grid.3x3").tag(3)
-                            Label("Small", systemImage: "square.grid.4x3.fill").tag(5)
-                        }
-                    } label: { Image(systemName: "square.grid.2x2") }
-                    Button { media.syncAll(list); Haptics.tap() } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: media.syncing)
-                    }
-                    .disabled(media.syncing || conn.state != .online || filter == 3)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .fullScreenCover(item: $selected) { m in
                 MediaViewer(items: list, start: m)
                     .navigationTransition(.zoom(sourceID: m.id, in: ns))

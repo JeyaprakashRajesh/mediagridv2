@@ -9,7 +9,6 @@ struct RootView: View {
     @EnvironmentObject var media: MediaStore
     @State private var tab: AppTab = .music
     @State private var showPlayer = false
-    @ObservedObject private var chrome = TabChrome.shared
     @AppStorage("mg.accent") private var accent = "blue"
 
     var body: some View {
@@ -47,7 +46,7 @@ struct RootView: View {
             Tab("Profile", systemImage: "person.crop.circle", value: AppTab.profile) { ProfileView() }
         }
         .id(accent) // rebuild so every view re-reads the accent colour
-        .tabBarMinimizeBehavior(chrome.scrollingUp ? .never : .onScrollDown)
+        .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory {
             MiniPlayer { withAnimation(.smooth(duration: 0.4)) { showPlayer = true } }
         }

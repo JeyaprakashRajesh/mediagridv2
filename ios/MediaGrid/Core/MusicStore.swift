@@ -101,6 +101,7 @@ final class MusicStore: ObservableObject {
             if let d = try? JSONEncoder().encode(t) { try? d.write(to: cacheURL, options: .atomic) }
             lastError = nil
             await refreshPlayback()
+            await refreshPlaylists()
         } catch {
             lastError = error.localizedDescription
         }
@@ -214,6 +215,31 @@ final class MusicStore: ObservableObject {
         }
     }
 
+    /// Playlists live on the PC so the phone and the PC always show the same ones.
+    func applyPlaylists(_ any: Any?) {
+        guard let any, JSONSerialization.isValidJSONObject(any), let d = try? JSONSerialization.data(withJSONObject: any),
+              let list = try? JSONDecoder().decode([UserPlaylist].self, from: d) else { return }
+        playlists = list
+        saveState()
+    }
+
+    func pushPlaylists() {
+        guard Connection.shared.isSignedIn, let d = try? JSONEncoder().encode(playlists),
+              let json = try? JSONSerialization.jsonObject(with: d) else { return }
+        Task { try? await Connection.shared.post("/api/playlists", json: json) }
+    }
+
+    func refreshPlaylists() async {
+        guard let d = try? await Connection.shared.request("/api/playlists"),
+              let json = try? JSONSerialization.jsonObject(with: d) as? [Any] else { return }
+        let key = "mg.playlistsSynced"
+        if !UserDefaults.standard.bool(forKey: key) {
+            UserDefaults.standard.set(true, forKey: key)
+            if json.isEmpty && !playlists.isEmpty { pushPlaylists(); return }   // first sync: upload what this phone already has
+        }
+        applyPlaylists(json)
+    }
+
     func refreshPlayback() async {
         guard let d = try? await Connection.shared.request("/api/playback") else { return }
         applyPlayback(try? JSONSerialization.jsonObject(with: d))
@@ -227,24 +253,24 @@ final class MusicStore: ObservableObject {
 
     func createPlaylist(_ name: String, tracks ids: [String] = []) {
         playlists.insert(UserPlaylist(name: name, trackIDs: ids), at: 0)
-        saveState()
+        saveState(); pushPlaylists()
     }
 
     func add(_ t: Track, to p: UserPlaylist) {
         guard let i = playlists.firstIndex(where: { $0.id == p.id }), !playlists[i].trackIDs.contains(t.id) else { return }
         playlists[i].trackIDs.append(t.id)
-        saveState()
+        saveState(); pushPlaylists()
     }
 
     func removeFromPlaylist(_ t: Track, _ p: UserPlaylist) {
         guard let i = playlists.firstIndex(where: { $0.id == p.id }) else { return }
         playlists[i].trackIDs.removeAll { $0 == t.id }
-        saveState()
+        saveState(); pushPlaylists()
     }
 
     func deletePlaylist(_ p: UserPlaylist) {
         playlists.removeAll { $0.id == p.id }
-        saveState()
+        saveState(); pushPlaylists()
     }
 
     func tracks(for p: UserPlaylist) -> [Track] {

@@ -66,6 +66,7 @@ pub async fn run(app: Shared) {
         .route("/api/screen", get(screen))
         .route("/api/devices", get(devices))
         .route("/api/playback", get(playback_get).post(playback_set))
+        .route("/api/playlists", get(playlists_get).post(playlists_set))
         .route("/api/phone", post(phone_cmd))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), auth));
@@ -541,6 +542,25 @@ async fn screen(State(app): State<Shared>, Query(q): Q) -> Response {
         Ok(Some(b)) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], b).into_response(),
         _ => err(StatusCode::INTERNAL_SERVER_ERROR, "capture failed"),
     }
+}
+
+async fn playlists_get(State(app): State<Shared>) -> Json<Value> {
+    let v = app.playlists.read().clone();
+    Json(v)
+}
+
+/// Last writer wins: a device posts its whole playlist list after it changes one.
+async fn playlists_set(State(app): State<Shared>, Json(b): Json<Value>) -> Response {
+    if !b.is_array() {
+        return err(StatusCode::BAD_REQUEST, "expected a JSON array of playlists");
+    }
+    *app.playlists.write() = b.clone();
+    if let Ok(j) = serde_json::to_string(&b) {
+        let _ = std::fs::write(config::data_dir().join("playlists.json"), j);
+    }
+    app.ui("playlists", b.clone());
+    app.push(json!({ "event": "playlists", "playlists": b }));
+    Json(json!({ "ok": true })).into_response()
 }
 
 async fn playback_get(State(app): State<Shared>) -> Json<Value> {

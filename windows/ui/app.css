@@ -286,3 +286,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px;
 .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; background: var(--hover-2); color: #fff; font-size: 26px; line-height: 1; }
 .lb-nav.prev { left: 24px; } .lb-nav.next { right: 24px; }
 .lb-nav:hover { background: rgba(255,255,255,0.28); }
+
+.recent { width: min(440px, 100%); padding: 14px; }
+.recent .art { width: 92px; height: 92px; border-radius: 18px; }
+.recent .r-body b { font-size: 16px; }
+.recent .r-play { width: 44px; height: 44px; }

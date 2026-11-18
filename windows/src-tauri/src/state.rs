@@ -42,6 +42,8 @@ pub struct App {
     pub shared: RwLock<Vec<SharedItem>>,
     /// {"recent":[{id,at,pos,device}], "now":{id,pos,playing,device,at}} — shared by PC and phones.
     pub playback: RwLock<serde_json::Value>,
+    /// Playlists made on any device (JSON array), shared through the PC.
+    pub playlists: RwLock<serde_json::Value>,
     pub last_clip: Mutex<String>,
     pub synced: Mutex<HashSet<String>>,
     pub ui_token: String,
@@ -72,6 +74,10 @@ impl App {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(|| serde_json::json!({ "recent": [], "now": null }));
+        let playlists: serde_json::Value = std::fs::read_to_string(config::data_dir().join("playlists.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!([]));
         Arc::new(App {
             cfg: RwLock::new(cfg),
             lib: RwLock::new(Library::default()),
@@ -79,6 +85,7 @@ impl App {
             devices: RwLock::new(HashMap::new()),
             shared: RwLock::new(shared),
             playback: RwLock::new(playback),
+            playlists: RwLock::new(playlists),
             last_clip: Mutex::new(String::new()),
             synced: Mutex::new(config::load_synced()),
             ui_token: config::random_hex(16),

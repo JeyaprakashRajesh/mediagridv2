@@ -282,6 +282,8 @@ final class Coordinator: ObservableObject {
             Task { await MusicStore.shared.refresh() }
         case "playback":
             MusicStore.shared.applyPlayback(e.body["playback"])
+        case "playlists":
+            MusicStore.shared.applyPlaylists(e.body["playlists"])
         case "signedout":
             Connection.shared.signOut()
         case "command":

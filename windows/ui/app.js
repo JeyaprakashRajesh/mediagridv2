@@ -12,6 +12,7 @@ let filtered = [];
 let media = [];
 let mediaKind = "";
 let musicFilter = { q: "", chip: "all" };
+let playlists = [];
 
 const api = async (path, opts = {}) => {
   const r = await fetch(BASE + path, {
@@ -119,6 +120,7 @@ function renderRecent() {
 }
 async function loadTracks() {
   try { tracks = await api("/api/music/tracks"); } catch { tracks = []; }
+  try { playlists = await api("/api/playlists"); } catch { playlists = []; }
   const artists = new Set(tracks.map((t) => t.artist)), albums = new Set(tracks.map((t) => t.album));
   const hours = tracks.reduce((a, t) => a + t.duration, 0) / 3600;
   $("#music-sub").textContent = tracks.length
@@ -127,7 +129,8 @@ async function loadTracks() {
   const chips = [["all", "All songs"], ["recent", "Recently added"], ["long", "Long listens"], ...[...albums].slice(0, 0)];
   const topArtists = Object.entries(tracks.reduce((m, t) => ((m[t.artist] = (m[t.artist] || 0) + 1), m), {}))
     .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([a]) => ["artist:" + a, a]);
-  $("#music-chips").innerHTML = [...chips, ...topArtists]
+  const plChips = playlists.map((p) => ["pl:" + p.id, "♪ " + p.name]);
+  $("#music-chips").innerHTML = [...chips, ...plChips, ...topArtists]
     .map(([k, l]) => `<button class="chip ${musicFilter.chip === k ? "active" : ""}" data-k="${esc(k)}">${esc(l)}</button>`).join("");
   $$("#music-chips .chip").forEach((c) => (c.onclick = () => { musicFilter.chip = c.dataset.k; loadTracksView(); $$("#music-chips .chip").forEach((x) => x.classList.toggle("active", x === c)); }));
   loadTracksView();
@@ -140,6 +143,7 @@ function loadTracksView() {
   const c = musicFilter.chip;
   if (c === "recent") list = [...list].sort((a, b) => b.added - a.added).slice(0, 100);
   else if (c === "long") list = list.filter((t) => t.duration > 300);
+  else if (c.startsWith("pl:")) { const pl = playlists.find((p) => p.id === c.slice(3)); list = (pl ? pl.trackIDs : []).map((id) => list.find((t) => t.id === id)).filter(Boolean); }
   else if (c.startsWith("artist:")) list = list.filter((t) => t.artist === c.slice(7));
   filtered = list;
   const el = $("#tracklist");
@@ -438,6 +442,7 @@ T.event.listen("mg", ({ payload }) => {
     if (data.item && media.length) { media.unshift(data.item); if ($("#tab-media").classList.contains("active")) renderMedia(); }
   }
   else if (event === "playback") applyPlayback(data);
+  else if (event === "playlists") { playlists = data; loadTracks(); }
   else if (event === "error") toast(data.message);
 });
 
