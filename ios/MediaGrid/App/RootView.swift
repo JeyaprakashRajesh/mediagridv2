@@ -9,6 +9,8 @@ struct RootView: View {
     @EnvironmentObject var media: MediaStore
     @State private var tab: AppTab = .music
     @State private var showPlayer = false
+    @ObservedObject private var chrome = TabChrome.shared
+    @AppStorage("mg.accent") private var accent = "blue"
 
     var body: some View {
         ZStack {
@@ -44,14 +46,18 @@ struct RootView: View {
             Tab("PC", systemImage: "desktopcomputer", value: AppTab.pc) { PCView() }
             Tab("Profile", systemImage: "person.crop.circle", value: AppTab.profile) { ProfileView() }
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
+        .id(accent) // rebuild so every view re-reads the accent colour
+        .tabBarMinimizeBehavior(chrome.scrollingUp ? .never : .onScrollDown)
         .tabViewBottomAccessory {
-            MiniPlayer { showPlayer = true }
+            MiniPlayer { withAnimation(.smooth(duration: 0.4)) { showPlayer = true } }
         }
-        .sheet(isPresented: $showPlayer) {
-            NowPlayingView()
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.clear)
+        // Full-screen page that pushes in like a navigation stack (not a drawer sheet).
+        .overlay {
+            if showPlayer {
+                NowPlayingView { withAnimation(.smooth(duration: 0.4)) { showPlayer = false } }
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
+            }
         }
         .task {
             await music.refresh()

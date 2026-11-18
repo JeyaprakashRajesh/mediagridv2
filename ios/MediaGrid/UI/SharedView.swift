@@ -30,6 +30,7 @@ struct SharedView: View {
                     .padding(.bottom, 60)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .trackScrollDirection()
                 .refreshable { await store.refresh() }
             }
             .navigationTitle("Shared")

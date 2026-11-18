@@ -8,6 +8,8 @@ struct ProfileView: View {
     @EnvironmentObject var clip: ClipboardSync
     @EnvironmentObject var player: Player
     @AppStorage("mg.liveActivity") private var liveActivity = true
+    @AppStorage("mg.appearance") private var appearance = 0
+    @AppStorage("mg.accent") private var accent = "blue"
     @State private var editingHost = false
     @State private var newHost = ""
     @State private var confirmSignOut = false
@@ -19,6 +21,7 @@ struct ProfileView: View {
                 ScrollView {
                     VStack(spacing: 18) {
                         header
+                        appearanceCard
                         photoCard
                         connectionCard
                         togglesCard
@@ -26,13 +29,14 @@ struct ProfileView: View {
                         Button(role: .destructive) { confirmSignOut = true } label: {
                             Text("Sign out").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                         }
-                        .buttonStyle(.glass).tint(Theme.pink)
+                        .buttonStyle(.glass).tint(.red)
                         Text("MediaGrid \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · Made for Jeyaprakash's PC")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 60)
                 }
+                .trackScrollDirection()
             }
             .navigationTitle("Profile")
             .confirmationDialog("Sign out of MediaGrid?", isPresented: $confirmSignOut, titleVisibility: .visible) {
@@ -87,11 +91,36 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var appearanceCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Appearance").font(.headline)
+                Picker("Theme", selection: $appearance) {
+                    Text("System").tag(0); Text("Light").tag(1); Text("Dark").tag(2)
+                }
+                .pickerStyle(.segmented)
+                Text("Accent colour").font(.subheadline).foregroundStyle(.secondary)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 14) {
+                    ForEach(Theme.accents, id: \.id) { a in
+                        Button { accent = a.id; Haptics.tap() } label: {
+                            VStack(spacing: 6) {
+                                Circle().fill(a.color).frame(width: 40, height: 40)
+                                    .overlay { if accent == a.id { Image(systemName: "checkmark").font(.subheadline.weight(.bold)).foregroundStyle(.white) } }
+                                Text(a.name).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
     private var photoCard: some View {
-        GlassCard(tint: Theme.pink) {
+        GlassCard(tint: Theme.accent) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Image(systemName: "photo.stack.fill").font(.title2).foregroundStyle(Theme.pink)
+                    Image(systemName: "photo.stack.fill").font(.title2).foregroundStyle(Theme.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Photo backup to PC").font(.headline)
                         Text(photos.running ? photos.status : photos.lastSync.map { "Last backup \($0.relative)" } ?? "Not backed up yet")
@@ -104,10 +133,10 @@ struct ProfileView: View {
                     } label: {
                         Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: photos.running)
                     }
-                    .buttonStyle(.glassProminent).tint(Theme.pink).disabled(photos.running || conn.state != .online)
+                    .buttonStyle(.glassProminent).tint(Theme.accent).disabled(photos.running || conn.state != .online)
                 }
                 if photos.running && photos.total > 0 {
-                    ProgressView(value: Double(photos.done), total: Double(photos.total)).tint(Theme.pink)
+                    ProgressView(value: Double(photos.done), total: Double(photos.total)).tint(Theme.accent)
                 }
                 Toggle("Back up new photos automatically", isOn: $photos.auto).tint(Theme.violet)
                 Toggle("Include videos", isOn: $photos.includeVideos).tint(Theme.violet)

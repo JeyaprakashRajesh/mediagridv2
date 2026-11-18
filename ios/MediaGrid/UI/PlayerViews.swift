@@ -30,14 +30,23 @@ struct MiniPlayer: View {
                 if placement != .inline {
                     Button { player.next() } label: { Image(systemName: "forward.fill").font(.body).frame(width: 30, height: 34) }
                 }
+            } else if let r = music.recentlyPlayed.first {
+                ArtworkView(track: r.track, size: placement == .inline ? 28 : 36, radius: 8)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(r.track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    if placement != .inline {
+                        Text("Recently played · \(r.at.relative)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button { player.playRecent(r.track, in: music.recentlyPlayed.map(\.track), pos: r.pos) } label: {
+                    Image(systemName: "play.fill").font(.title3).frame(width: 34, height: 34)
+                }
             } else {
-                Image(systemName: "shuffle").foregroundStyle(Theme.violet)
-                Text(music.tracks.isEmpty ? "Connect your PC to stream music" : "Shuffle your library")
+                Image(systemName: "music.note").foregroundStyle(Theme.accent)
+                Text(music.tracks.isEmpty ? "Connect your PC to stream music" : "Pick a song to start")
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
-                if !music.tracks.isEmpty {
-                    Button { player.shuffleAll() } label: { Image(systemName: "play.fill").frame(width: 34, height: 34) }
-                }
             }
         }
         .foregroundStyle(.primary)
@@ -49,140 +58,142 @@ struct MiniPlayer: View {
 }
 
 struct NowPlayingView: View {
+    var onClose: () -> Void
     @EnvironmentObject var player: Player
     @EnvironmentObject var music: MusicStore
-    @Environment(\.dismiss) private var dismiss
     @State private var scrubbing = false
     @State private var scrubValue: Double = 0
     @State private var showQueue = false
 
+    private var shown: Double { scrubbing ? scrubValue : player.time }
+
     var body: some View {
         let t = player.current
-        ZStack {
-            // blurred artwork backdrop
-            ZStack {
-                Theme.ink
-                ArtworkView(track: t, size: 600, radius: 0)
-                    .blur(radius: 80).scaleEffect(1.6).opacity(0.75)
-                LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+        VStack(spacing: 18) {
+            header
+
+            if showQueue {
+                queue.transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                GeometryReader { g in
+                    let side = min(g.size.width, g.size.height)
+                    ArtworkView(track: t, size: side, radius: 24)
+                        .scaleEffect(player.isPlaying ? 1 : 0.88)
+                        .shadow(color: .black.opacity(0.5), radius: player.isPlaying ? 36 : 16, y: 18)
+                        .frame(width: g.size.width, height: g.size.height)
+                        .animation(.spring(duration: 0.6, bounce: 0.3), value: player.isPlaying)
+                        .id(t?.id)
+                        .transition(.asymmetric(insertion: .scale(scale: 0.9).combined(with: .opacity), removal: .opacity))
+                }
+                .frame(maxWidth: 400, maxHeight: 400)
+                .frame(maxHeight: .infinity)
             }
-            .ignoresSafeArea()
 
-            VStack(spacing: 22) {
-                HStack {
-                    Button { dismiss() } label: { Image(systemName: "chevron.down").font(.headline).frame(width: 40, height: 40) }
-                        .buttonStyle(.glass).buttonBorderShape(.circle)
-                    Spacer()
-                    VStack(spacing: 2) {
-                        Text("PLAYING FROM").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
-                        Text(player.source.isEmpty ? "Your Library" : player.source).font(.footnote.weight(.semibold)).lineLimit(1)
-                    }
-                    Spacer()
-                    Button { withAnimation(.spring) { showQueue.toggle() } } label: {
-                        Image(systemName: showQueue ? "music.note" : "list.bullet").font(.headline).frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.glass).buttonBorderShape(.circle)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t?.title ?? "Not Playing").font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.75)
+                    Text(t?.artist ?? "").font(.body).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
                 }
-                .padding(.top, 14)
-
-                if showQueue {
-                    queue.transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    Spacer(minLength: 0)
-                    GeometryReader { g in
-                        let side = min(g.size.width, g.size.height)
-                        ArtworkView(track: t, size: side, radius: 24)
-                            .scaleEffect(player.isPlaying ? 1 : 0.86)
-                            .shadow(color: .black.opacity(0.5), radius: player.isPlaying ? 40 : 18, y: 20)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .animation(.spring(duration: 0.6, bounce: 0.3), value: player.isPlaying)
-                            .id(t?.id)
-                            .transition(.asymmetric(insertion: .scale(scale: 0.9).combined(with: .opacity), removal: .opacity))
-                    }
-                    .frame(maxHeight: 360)
-                    Spacer(minLength: 0)
-                }
-
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(t?.title ?? "Not Playing").font(.title2.weight(.bold)).lineLimit(1)
-                        Text(t?.artist ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    .contentTransition(.opacity)
-                    Spacer()
-                    if let t {
-                        Button { music.toggleLike(t); Haptics.tap() } label: {
-                            Image(systemName: music.liked.contains(t.id) ? "heart.fill" : "heart")
-                                .font(.title2).foregroundStyle(music.liked.contains(t.id) ? Theme.pink : .primary)
-                                .contentTransition(.symbolEffect(.replace))
-                                .symbolEffect(.bounce, value: music.liked.contains(t.id))
-                        }
-                    }
-                }
-
-                // scrubber
-                VStack(spacing: 6) {
-                    Slider(value: Binding(get: { scrubbing ? scrubValue : player.time },
-                                          set: { scrubValue = $0 }),
-                           in: 0...max(player.duration, 1), onEditingChanged: { editing in
-                        if editing { scrubValue = player.time; scrubbing = true }
-                        else { player.seek(scrubValue); scrubbing = false }
-                    })
-                    .tint(.white)
-                    HStack {
-                        Text((scrubbing ? scrubValue : player.time).mmss)
-                        Spacer()
-                        if player.buffering { ProgressView().controlSize(.mini) }
-                        Spacer()
-                        Text("-" + max(0, player.duration - (scrubbing ? scrubValue : player.time)).mmss)
-                    }
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                }
-
-                // transport
-                HStack {
-                    Button { player.shuffle.toggle(); Haptics.tap() } label: {
-                        Image(systemName: "shuffle").font(.title3).foregroundStyle(player.shuffle ? Theme.violet : .secondary)
-                    }
-                    Spacer()
-                    Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }
-                    Spacer()
-                    Button { player.toggle(); Haptics.soft() } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 34)).frame(width: 78, height: 78)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentTransition(.opacity)
+                if let t {
+                    Button { music.toggleLike(t); Haptics.tap() } label: {
+                        Image(systemName: music.liked.contains(t.id) ? "heart.fill" : "heart")
+                            .font(.title2).foregroundStyle(music.liked.contains(t.id) ? Theme.pink : .white)
                             .contentTransition(.symbolEffect(.replace))
-                    }
-                    .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white.opacity(0.9)).foregroundStyle(.black)
-                    Spacer()
-                    Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }
-                    Spacer()
-                    Button {
-                        player.repeatMode = RepeatMode(rawValue: (player.repeatMode.rawValue + 1) % 3) ?? .off
-                        Haptics.tap()
-                    } label: {
-                        Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
-                            .font(.title3).foregroundStyle(player.repeatMode == .off ? .secondary : Theme.violet)
+                            .symbolEffect(.bounce, value: music.liked.contains(t.id))
                     }
                 }
-                .foregroundStyle(.white)
-
-                HStack {
-                    AirPlayButton().frame(width: 34, height: 34)
-                    Spacer()
-                    if let t {
-                        Label(music.isDownloaded(t) ? "On iPhone" : "Streaming from PC",
-                              systemImage: music.isDownloaded(t) ? "arrow.down.circle.fill" : "dot.radiowaves.left.and.right")
-                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    ShareLink(item: t.map { "\($0.title) — \($0.artist)" } ?? "") { Image(systemName: "square.and.arrow.up") }
-                        .frame(width: 34, height: 34)
-                }
-                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 26)
+
+            // scrubber
+            VStack(spacing: 4) {
+                WavySeekBar(progress: player.duration > 0 ? shown / player.duration : 0, playing: player.isPlaying,
+                            onScrub: { scrubbing = true; scrubValue = $0 * max(player.duration, 1) },
+                            onCommit: { player.seek($0 * max(player.duration, 1)); scrubbing = false })
+                HStack {
+                    Text(shown.mmss)
+                    Spacer()
+                    if player.buffering { ProgressView().controlSize(.mini) }
+                    Spacer()
+                    Text("-" + max(0, player.duration - shown).mmss)
+                }
+                .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+            }
+
+            // transport
+            HStack {
+                Button { player.shuffle.toggle(); Haptics.tap() } label: {
+                    Image(systemName: "shuffle").font(.title3).foregroundStyle(player.shuffle ? Theme.accent : .white.opacity(0.7))
+                }
+                Spacer()
+                Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 28)) }
+                Spacer()
+                Button { player.toggle(); Haptics.soft() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 32)).frame(width: 74, height: 74)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white.opacity(0.9)).foregroundStyle(.black)
+                Spacer()
+                Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 28)) }
+                Spacer()
+                Button {
+                    player.repeatMode = RepeatMode(rawValue: (player.repeatMode.rawValue + 1) % 3) ?? .off
+                    Haptics.tap()
+                } label: {
+                    Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
+                        .font(.title3).foregroundStyle(player.repeatMode == .off ? .white.opacity(0.7) : Theme.accent)
+                }
+            }
+
+            HStack {
+                AirPlayButton().frame(width: 34, height: 34)
+                Spacer()
+                if let t {
+                    Label(music.isDownloaded(t) ? "On iPhone" : "Streaming from PC",
+                          systemImage: music.isDownloaded(t) ? "arrow.down.circle.fill" : "dot.radiowaves.left.and.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                }
+                Spacer()
+                ShareLink(item: t.map { "\($0.title) — \($0.artist)" } ?? "") { Image(systemName: "square.and.arrow.up") }
+                    .frame(width: 34, height: 34)
+            }
         }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 24)
+        .padding(.top, 8).padding(.bottom, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            // Colour comes from the song's artwork. It is a background so its oversize blur can't widen the layout.
+            Color.black
+                .overlay { ArtworkView(track: t, size: 600, radius: 0).blur(radius: 80).scaleEffect(1.6).opacity(0.75) }
+                .overlay { LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom) }
+                .clipped()
+                .ignoresSafeArea()
+        }
+        .environment(\.colorScheme, .dark)
+        .gesture(DragGesture(minimumDistance: 24).onEnded { v in
+            if v.translation.width > 90, abs(v.translation.height) < 80 { onClose() }   // swipe right = back
+        })
         .animation(.smooth(duration: 0.45), value: t?.id)
+    }
+
+    private var header: some View {
+        HStack {
+            Button(action: onClose) { Image(systemName: "chevron.left").font(.headline).frame(width: 40, height: 40) }
+                .buttonStyle(.glass).buttonBorderShape(.circle)
+            Spacer()
+            VStack(spacing: 2) {
+                Text("PLAYING FROM").font(.caption2.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+                Text(player.source.isEmpty ? "Your Library" : player.source).font(.footnote.weight(.semibold)).lineLimit(1)
+            }
+            Spacer()
+            Button { withAnimation(.spring) { showQueue.toggle() } } label: {
+                Image(systemName: showQueue ? "music.note" : "list.bullet").font(.headline).frame(width: 40, height: 40)
+            }
+            .buttonStyle(.glass).buttonBorderShape(.circle)
+        }
     }
 
     private var queue: some View {
@@ -228,4 +239,44 @@ struct AirPlayButton: UIViewRepresentable {
         return v
     }
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+/// Material-style "wavy" progress: the played part ripples while music plays and flattens when you drag.
+struct WavySeekBar: View {
+    var progress: Double
+    var playing: Bool
+    var onScrub: (Double) -> Void
+    var onCommit: (Double) -> Void
+    @State private var dragging = false
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing && !dragging)) { ctx in
+                let phase = ctx.date.timeIntervalSinceReferenceDate * 4
+                Canvas { c, size in
+                    let mid = size.height / 2
+                    let x = size.width * min(max(progress, 0), 1)
+                    let amp: CGFloat = dragging ? 0 : (playing ? 5 : 1.5)
+                    func y(_ px: CGFloat) -> CGFloat { mid + sin(px / 9 + phase) * amp * min(1, px / 24) }
+                    var played = Path()
+                    played.move(to: CGPoint(x: 0, y: y(0)))
+                    var px: CGFloat = 0
+                    while px < x { px += 2; played.addLine(to: CGPoint(x: min(px, x), y: y(min(px, x)))) }
+                    var rest = Path()
+                    rest.move(to: CGPoint(x: x, y: mid)); rest.addLine(to: CGPoint(x: size.width, y: mid))
+                    c.stroke(rest, with: .color(.white.opacity(0.28)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    c.stroke(played, with: .color(.white), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    let r: CGFloat = dragging ? 11 : 7
+                    c.fill(Path(ellipseIn: CGRect(x: x - r, y: y(x) - r, width: r * 2, height: r * 2)), with: .color(.white))
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in dragging = true; onScrub(min(max(v.location.x / w, 0), 1)) }
+                .onEnded { v in onCommit(min(max(v.location.x / w, 0), 1)); dragging = false })
+            .animation(.smooth(duration: 0.2), value: dragging)
+        }
+        .frame(height: 34)
+    }
 }

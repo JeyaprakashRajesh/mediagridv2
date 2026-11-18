@@ -1,39 +1,32 @@
 import SwiftUI
 
+/// Material-style theme: flat grey surfaces, one accent colour (Settings → Appearance),
+/// Liquid Glass for controls. Legacy names (violet, cyan, pink, mint) now map to the accent / standard colours.
 enum Theme {
-    static let pink = Color(hex: 0xFF5FA2)
-    static let violet = Color(hex: 0x8F6BFF)
-    static let cyan = Color(hex: 0x2FD4FF)
-    static let mint = Color(hex: 0x3CF2B5)
-    static let ink = Color(hex: 0x0B0A16)
-
-    static let brand = LinearGradient(colors: [pink, violet, cyan], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let palettes: [[Color]] = [
-        [Color(hex: 0xFF5FA2), Color(hex: 0xFF8A5B)],
-        [Color(hex: 0x8F6BFF), Color(hex: 0x5B3BEA)],
-        [Color(hex: 0x2FD4FF), Color(hex: 0x3D7BFF)],
-        [Color(hex: 0x3CF2B5), Color(hex: 0x17B8C9)],
-        [Color(hex: 0xF7971E), Color(hex: 0xFF5F6D)],
-        [Color(hex: 0x614385), Color(hex: 0x516395)],
+    static let accents: [(id: String, name: String, color: Color)] = [
+        ("blue", "Blue", Color(hex: 0x1A73E8)), ("green", "Green", Color(hex: 0x1E8E3E)),
+        ("red", "Red", Color(hex: 0xD93025)), ("amber", "Amber", Color(hex: 0xE37400)),
+        ("teal", "Teal", Color(hex: 0x00897B)), ("sapphire", "Sapphire", Color(hex: 0x3F51B5)),
+        ("gold", "Gold", Color(hex: 0xB8860B)), ("graphite", "Graphite", Color(hex: 0x5F6368)),
     ]
+    static var accent: Color {
+        let id = UserDefaults.standard.string(forKey: "mg.accent") ?? "blue"
+        return (accents.first { $0.id == id } ?? accents[0]).color
+    }
+    static var violet: Color { accent }
+    static var cyan: Color { accent }
+    static var pink: Color { Color(hex: 0xD93025) }   // likes / destructive
+    static let mint = Color(hex: 0x1E8E3E)            // success / downloaded
+    /// Flat surface that follows the system light / dark setting.
+    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.105, green: 0.11, blue: 0.118, alpha: 1)
+                                                                   : UIColor(red: 0.945, green: 0.953, blue: 0.957, alpha: 1) })
+    static var brand: Color { accent }
+    static let palettes: [[Color]] = accents.map { [$0.color] }
 }
 
-/// Deep animated backdrop that the Liquid Glass picks colour up from.
+/// Plain grey Material surface; Liquid Glass elements sit on top of it.
 struct AppBackground: View {
-    @State private var t = false
-    var body: some View {
-        ZStack {
-            Theme.ink
-            Circle().fill(Theme.violet.opacity(0.45)).frame(width: 420).blur(radius: 120)
-                .offset(x: t ? -120 : -60, y: t ? -260 : -320)
-            Circle().fill(Theme.pink.opacity(0.28)).frame(width: 360).blur(radius: 120)
-                .offset(x: t ? 160 : 120, y: t ? 40 : -20)
-            Circle().fill(Theme.cyan.opacity(0.22)).frame(width: 380).blur(radius: 130)
-                .offset(x: t ? -80 : -140, y: t ? 420 : 360)
-        }
-        .ignoresSafeArea()
-        .onAppear { withAnimation(.easeInOut(duration: 14).repeatForever(autoreverses: true)) { t.toggle() } }
-    }
+    var body: some View { Theme.ink.ignoresSafeArea() }
 }
 
 struct GlassCard<Content: View>: View {
@@ -109,5 +102,23 @@ extension Date {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: self, relativeTo: .now)
+    }
+}
+
+/// Scroll direction of whichever tab is on screen, so the tab bar can expand again the moment you scroll up.
+@MainActor final class TabChrome: ObservableObject {
+    static let shared = TabChrome()
+    @Published var scrollingUp = false
+}
+
+extension View {
+    func trackScrollDirection() -> some View {
+        onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { old, new in
+            guard abs(new - old) > 3 else { return }
+            MainActor.assumeIsolated {
+                let up = new < old
+                if TabChrome.shared.scrollingUp != up { TabChrome.shared.scrollingUp = up }
+            }
+        }
     }
 }

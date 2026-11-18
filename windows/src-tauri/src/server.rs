@@ -65,6 +65,7 @@ pub async fn run(app: Shared) {
         .route("/api/control", post(control_http))
         .route("/api/screen", get(screen))
         .route("/api/devices", get(devices))
+        .route("/api/playback", get(playback_get).post(playback_set))
         .route("/api/phone", post(phone_cmd))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), auth));
@@ -540,6 +541,18 @@ async fn screen(State(app): State<Shared>, Query(q): Q) -> Response {
         Ok(Some(b)) => ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")], b).into_response(),
         _ => err(StatusCode::INTERNAL_SERVER_ERROR, "capture failed"),
     }
+}
+
+async fn playback_get(State(app): State<Shared>) -> Json<Value> {
+    let v = app.playback.read().clone();
+    Json(v)
+}
+
+async fn playback_set(State(app): State<Shared>, Json(b): Json<Value>) -> Json<Value> {
+    let v = app.set_playback(&b);
+    app.ui("playback", v.clone());
+    app.push(json!({ "event": "playback", "playback": v.clone() }));
+    Json(v)
 }
 
 async fn devices(State(app): State<Shared>) -> Json<Value> {

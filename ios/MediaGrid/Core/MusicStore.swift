@@ -42,6 +42,7 @@ final class MusicStore: ObservableObject {
     @Published var liked: Set<String> = []
     @Published var playCounts: [String: Int] = [:]
     @Published var lastPlayed: [String: Double] = [:]
+    @Published var serverRecent: [RecentEntry] = []
     @Published var playlists: [UserPlaylist] = []
     @Published var loading = false
     @Published var syncing = false
@@ -99,6 +100,7 @@ final class MusicStore: ObservableObject {
             tracks = t
             if let d = try? JSONEncoder().encode(t) { try? d.write(to: cacheURL, options: .atomic) }
             lastError = nil
+            await refreshPlayback()
         } catch {
             lastError = error.localizedDescription
         }
@@ -180,6 +182,43 @@ final class MusicStore: ObservableObject {
         saveState()
     }
 
+    /// Called when a song starts: feeds "Recently played" without bumping play counts.
+    func noteStarted(_ t: Track) {
+        lastPlayed[t.id] = Date().timeIntervalSince1970
+        saveState()
+    }
+
+    /// Recently played on any of your devices (merged with the PC's copy), newest first, with the position to resume from.
+    var recentlyPlayed: [(track: Track, at: Date, pos: Double)] {
+        let map = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var m: [String: (at: Double, pos: Double)] = lastPlayed.mapValues { ($0, 0) }
+        if let rid = UserDefaults.standard.string(forKey: "mg.resumeID"), m[rid] != nil { m[rid]?.pos = UserDefaults.standard.double(forKey: "mg.resumeTime") }
+        for e in serverRecent where e.at / 1000 >= (m[e.id]?.at ?? 0) { m[e.id] = (e.at / 1000, e.pos) }
+        return m.sorted { $0.value.at > $1.value.at }.prefix(8)
+            .compactMap { id, v in map[id].map { ($0, Date(timeIntervalSince1970: v.at), v.pos) } }
+    }
+
+    struct RecentEntry { var id: String; var at: Double; var pos: Double; var device: String }
+
+    /// Take the PC's playback state (from GET /api/playback or the `playback` WebSocket event).
+    func applyPlayback(_ any: Any?) {
+        guard let o = any as? [String: Any], let arr = o["recent"] as? [[String: Any]] else { return }
+        serverRecent = arr.compactMap { r in
+            guard let id = r["id"] as? String else { return nil }
+            return RecentEntry(id: id, at: (r["at"] as? Double) ?? 0, pos: (r["pos"] as? Double) ?? 0, device: (r["device"] as? String) ?? "")
+        }
+        // Another device started playing: stop here so only one device plays.
+        if let n = o["now"] as? [String: Any], (n["playing"] as? Bool) == true, (n["device"] as? String) != UIDevice.current.name,
+           Date().timeIntervalSince1970 * 1000 - ((n["at"] as? Double) ?? 0) < 20000, Player.shared.isPlaying {
+            Player.shared.pause()
+        }
+    }
+
+    func refreshPlayback() async {
+        guard let d = try? await Connection.shared.request("/api/playback") else { return }
+        applyPlayback(try? JSONSerialization.jsonObject(with: d))
+    }
+
     func notePlayed(_ t: Track) {
         playCounts[t.id, default: 0] += 1
         lastPlayed[t.id] = Date().timeIntervalSince1970
@@ -236,16 +275,16 @@ final class MusicStore: ObservableObject {
         let likedT = tracks.filter { liked.contains($0.id) }
         if !likedT.isEmpty {
             out.append(SmartMix(id: "liked", title: "Liked Songs", subtitle: "\(likedT.count) songs", symbol: "heart.fill",
-                                colors: [Color(hex: 0x5B3BEA), Color(hex: 0x8F6BFF), Color(hex: 0xBFA8FF)], tracks: likedT))
+                                colors: [Color(hex: 0xD93025)], tracks: likedT))
         }
         let recent = tracks.sorted { $0.added > $1.added }.prefix(60)
         out.append(SmartMix(id: "recent", title: "Recently Added", subtitle: "Fresh in your library", symbol: "sparkles",
-                            colors: [Color(hex: 0xFF5FA2), Color(hex: 0xFF8A5B)], tracks: Array(recent)))
+                            colors: [Color(hex: 0x1A73E8)], tracks: Array(recent)))
 
         let played = tracks.filter { (playCounts[$0.id] ?? 0) > 0 }.sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
         if played.count >= 5 {
             out.append(SmartMix(id: "repeat", title: "On Repeat", subtitle: "Songs you can't stop playing", symbol: "repeat",
-                                colors: [Color(hex: 0x2FD4FF), Color(hex: 0x3D7BFF)], tracks: Array(played.prefix(50))))
+                                colors: [Color(hex: 0x1E8E3E)], tracks: Array(played.prefix(50))))
         }
 
         // Daily mixes: built around your most played (or biggest) artists
@@ -253,8 +292,7 @@ final class MusicStore: ObservableObject {
             ts.reduce(0) { $0 + (playCounts[$1.id] ?? 0) * 3 + (liked.contains($1.id) ? 5 : 0) } + ts.count
         }
         let topArtists = artistScore.sorted { $0.value > $1.value }.map(\.key).filter { $0 != "Unknown Artist" }
-        let palettes: [[Color]] = [[Color(hex: 0x3CF2B5), Color(hex: 0x17B8C9)], [Color(hex: 0xFFB347), Color(hex: 0xFF5F6D)],
-                                   [Color(hex: 0x8F6BFF), Color(hex: 0x2FD4FF)], [Color(hex: 0xF857A6), Color(hex: 0xFF5858)]]
+        let palettes: [[Color]] = [[Color(hex: 0x00897B)], [Color(hex: 0xE37400)], [Color(hex: 0x3F51B5)], [Color(hex: 0x6D4C41)]]
         var used = Set<String>()
         var mixNo = 1
         for (i, a) in topArtists.enumerated() where mixNo <= 4 && !used.contains(a) {
@@ -272,22 +310,22 @@ final class MusicStore: ObservableObject {
         let rediscover = tracks.filter { (playCounts[$0.id] ?? 0) == 0 }.shuffled(using: &rng).prefix(40)
         if rediscover.count >= 5 {
             out.append(SmartMix(id: "discover", title: "Discover Weekly", subtitle: "Songs you haven't played yet", symbol: "safari",
-                                colors: [Color(hex: 0x1DB9A0), Color(hex: 0x3A6FF8)], tracks: Array(rediscover)))
+                                colors: [Color(hex: 0x00838F)], tracks: Array(rediscover)))
         }
         let offline = tracks.filter { downloaded.contains($0.id) }
         if !offline.isEmpty {
             out.append(SmartMix(id: "offline", title: "Downloaded", subtitle: "Plays without your PC", symbol: "arrow.down.circle.fill",
-                                colors: [Color(hex: 0x434343), Color(hex: 0x8E8E93)], tracks: offline))
+                                colors: [Color(hex: 0x5F6368)], tracks: offline))
         }
         let long = tracks.filter { $0.duration > 270 }.shuffled(using: &rng).prefix(50)
         if long.count >= 5 {
             out.append(SmartMix(id: "drive", title: "Long Drive", subtitle: "Settle in", symbol: "car.fill",
-                                colors: [Color(hex: 0x614385), Color(hex: 0x516395)], tracks: Array(long)))
+                                colors: [Color(hex: 0x455A64)], tracks: Array(long)))
         }
         let quick = tracks.filter { $0.duration > 0 && $0.duration < 200 }.shuffled(using: &rng).prefix(50)
         if quick.count >= 5 {
             out.append(SmartMix(id: "quick", title: "Quick Hits", subtitle: "Short & sweet", symbol: "bolt.fill",
-                                colors: [Color(hex: 0xF7971E), Color(hex: 0xFFD200)], tracks: Array(quick)))
+                                colors: [Color(hex: 0xB8860B)], tracks: Array(quick)))
         }
         return out
     }

@@ -44,6 +44,26 @@ const ICON = {
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
+/* ---------------- appearance: system light/dark + accent ---------------- */
+const ACCENTS = [["blue", "Blue", "#1a73e8", "#8ab4f8"], ["green", "Green", "#1e8e3e", "#81c995"], ["red", "Red", "#d93025", "#f28b82"], ["amber", "Amber", "#e37400", "#fdd663"],
+  ["teal", "Teal", "#00897b", "#78d9ca"], ["sapphire", "Sapphire", "#3f51b5", "#9fa8da"], ["gold", "Gold", "#b8860b", "#e6c35c"], ["graphite", "Graphite", "#5f6368", "#bdc1c6"]];
+const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme() {
+  const mode = store.get("mg.theme", "system"), acc = ACCENTS.find((a) => a[0] === store.get("mg.accent", "blue")) || ACCENTS[0];
+  const root = document.documentElement;
+  root.dataset.theme = mode === "system" ? (darkQuery.matches ? "dark" : "light") : mode;
+  root.style.setProperty("--accent", acc[2]);
+  root.style.setProperty("--accent-rgb", [1, 3, 5].map((i) => parseInt(acc[2].slice(i, i + 2), 16)).join(", "));
+  root.style.setProperty("--accent-text", root.dataset.theme === "dark" ? acc[3] : acc[2]);
+  $$("#theme-seg button").forEach((b) => b.classList.toggle("active", b.dataset.m === mode));
+  $("#swatches").innerHTML = ACCENTS.map((a) => `<button class="swatch ${a[0] === acc[0] ? "on" : ""}" data-a="${a[0]}" title="${a[1]}" style="background:${a[2]}">${a[0] === acc[0] ? '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>' : ""}</button>`).join("");
+  $$("#swatches .swatch").forEach((b) => (b.onclick = () => { store.set("mg.accent", b.dataset.a); applyTheme(); }));
+}
+$$("#theme-seg button").forEach((b) => (b.onclick = () => { store.set("mg.theme", b.dataset.m); applyTheme(); }));
+darkQuery.addEventListener("change", applyTheme); // follow the system setting live
+applyTheme();
+
 /* ---------------- window chrome ---------------- */
 const win = T.window.getCurrentWindow();
 $("#w-min").onclick = () => win.minimize();
@@ -61,6 +81,42 @@ function showTab(name) {
 $$(".nav").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 
 /* ---------------- music ---------------- */
+const greet = () => { const h = new Date().getHours(); return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
+$("#greeting").textContent = greet();
+
+/* recently played: remembered with time + position so you can continue */
+/* shared with the iPhone through the PC server: /api/playback */
+const DEVICE = "PC";
+let playback = { recent: [], now: null };
+const getRecent = () => (playback.recent || []).slice(0, 8);
+async function loadPlayback() { try { playback = await api("/api/playback"); } catch {} renderRecent(); }
+let lastPost = 0;
+function postPlayback(force = true) {
+  if (!player.cur || (!force && Date.now() - lastPost < 10000)) return;
+  lastPost = Date.now();
+  api("/api/playback", { method: "POST", json: { id: player.cur.id, pos: audio.currentTime || 0, playing: !audio.paused, device: DEVICE } }).catch(() => {});
+}
+function applyPlayback(p) {
+  playback = p; renderRecent();
+  // another device started playing: pause here so only one plays
+  const n = p.now;
+  if (n && n.playing && n.device !== DEVICE && !audio.paused && Date.now() - n.at < 20000) audio.pause();
+}
+function renderRecent() {
+  const items = getRecent().map((x) => ({ ...x, t: tracks.find((t) => t.id === x.id) })).filter((x) => x.t);
+  $("#recent-wrap").hidden = !items.length;
+  $("#recent-row").innerHTML = items.map((x, i) => `
+    <button class="recent glass" data-i="${i}">
+      <div class="art" ${x.t.has_art ? `style="background-image:url('${url("/api/music/art/" + x.t.id)}')"` : ""}>${x.t.has_art ? "" : ICON.note}</div>
+      <div class="r-body"><b>${esc(x.t.title)}</b><span>${esc(x.t.artist)}</span><small>${ago(x.at)}${x.pos > 3 ? " · resume " + fmtTime(x.pos) : ""}</small></div>
+      <div class="r-play">${ICON.play}</div>
+    </button>`).join("");
+  $$("#recent-row .recent").forEach((b) => (b.onclick = () => {
+    const x = items[+b.dataset.i], list = items.map((y) => y.t);
+    player.playList(list, +b.dataset.i);
+    if (x.pos > 3) audio.addEventListener("loadedmetadata", () => (audio.currentTime = x.pos), { once: true });
+  }));
+}
 async function loadTracks() {
   try { tracks = await api("/api/music/tracks"); } catch { tracks = []; }
   const artists = new Set(tracks.map((t) => t.artist)), albums = new Set(tracks.map((t) => t.album));
@@ -75,6 +131,7 @@ async function loadTracks() {
     .map(([k, l]) => `<button class="chip ${musicFilter.chip === k ? "active" : ""}" data-k="${esc(k)}">${esc(l)}</button>`).join("");
   $$("#music-chips .chip").forEach((c) => (c.onclick = () => { musicFilter.chip = c.dataset.k; loadTracksView(); $$("#music-chips .chip").forEach((x) => x.classList.toggle("active", x === c)); }));
   loadTracksView();
+  loadPlayback();
 }
 
 function loadTracksView() {
@@ -148,8 +205,8 @@ const player = {
   toggle() { if (!this.cur) return tracks.length && this.playList(tracks, 0); audio.paused ? audio.play() : audio.pause(); },
 };
 audio.onended = () => (player.repeat ? (audio.currentTime = 0, audio.play()) : player.next());
-audio.onplay = audio.onpause = () => { $("#p-play").innerHTML = audio.paused ? ICON.play : ICON.pause; $("#player").classList.toggle("is-playing", !audio.paused); };
-audio.ontimeupdate = () => { $("#p-cur").textContent = fmtTime(audio.currentTime); $("#p-dur").textContent = fmtTime(audio.duration); if (!seeking) $("#p-seek").value = audio.duration ? (audio.currentTime / audio.duration) * 1000 : 0; };
+audio.onplay = audio.onpause = () => { postPlayback(); $("#p-play").innerHTML = audio.paused ? ICON.play : ICON.pause; $("#player").classList.toggle("is-playing", !audio.paused); };
+audio.ontimeupdate = () => { if (!audio.paused) postPlayback(false); $("#p-cur").textContent = fmtTime(audio.currentTime); $("#p-dur").textContent = fmtTime(audio.duration); if (!seeking) $("#p-seek").value = audio.duration ? (audio.currentTime / audio.duration) * 1000 : 0; };
 let seeking = false;
 $("#p-seek").oninput = () => (seeking = true);
 $("#p-seek").onchange = (e) => { if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration; seeking = false; };
@@ -249,14 +306,25 @@ function renderMedia() {
   if (!list.length) { g.innerHTML = `<div class="empty" style="grid-column:1/-1"><b>No media here</b>Add photo and video folders in Settings, or sync from your iPhone.</div>`; return; }
   g.innerHTML = list.slice(0, 3000).map((m) => `<div class="tile" data-id="${m.id}">
     ${m.kind === "video" ? `<span class="badge">${ICON.video}Video</span>` : ""}${m.from_iphone ? `<span class="phone">${ICON.phone}</span>` : ""}</div>`).join("");
-  $$(".tile", g).forEach((t) => { io.observe(t); t.onclick = () => openLightbox(media.find((m) => m.id === t.dataset.id)); });
+  $$(".tile", g).forEach((t) => { io.observe(t); t.onclick = () => openLightbox(media.find((m) => m.id === t.dataset.id), list); });
 }
 $$("#media-seg button").forEach((b) => (b.onclick = () => { mediaKind = b.dataset.k; $$("#media-seg button").forEach((x) => x.classList.toggle("active", x === b)); renderMedia(); }));
-function openLightbox(m) {
+let lbList = [], lbIdx = 0;
+function lbStep(d) { if (!lbList.length) return; lbIdx = (lbIdx + d + lbList.length) % lbList.length; openLightbox(lbList[lbIdx]); }
+function openLightbox(m, list) {
+  if (list) { lbList = list; }
+  lbIdx = Math.max(0, lbList.findIndex((x) => x.id === m.id));
   const body = $("#lb-body");
   body.innerHTML = m.kind === "photo" ? `<img src="${url(`/api/media/thumb/${m.id}?s=1600`)}" onerror="this.src='${url(`/api/media/file/${m.id}`)}'"/>` : `<video src="${url(`/api/media/file/${m.id}`)}" controls autoplay></video>`;
   $("#lightbox").classList.add("open");
 }
+$("#lb-prev").onclick = (e) => { e.stopPropagation(); lbStep(-1); };
+$("#lb-next").onclick = (e) => { e.stopPropagation(); lbStep(1); };
+document.addEventListener("keydown", (e) => {
+  if (!$("#lightbox").classList.contains("open")) return;
+  if (e.key === "ArrowLeft") lbStep(-1); else if (e.key === "ArrowRight") lbStep(1);
+  else if (e.key === "Escape") { $("#lightbox").classList.remove("open"); $("#lb-body").innerHTML = ""; }
+});
 $("#lb-close").onclick = $("#lightbox").onclick = (e) => { if (e.target.closest("img,video")) return; $("#lightbox").classList.remove("open"); $("#lb-body").innerHTML = ""; };
 
 /* ---------------- mobile ---------------- */
@@ -369,6 +437,7 @@ T.event.listen("mg", ({ payload }) => {
     info.syncedPhotos++;
     if (data.item && media.length) { media.unshift(data.item); if ($("#tab-media").classList.contains("active")) renderMedia(); }
   }
+  else if (event === "playback") applyPlayback(data);
   else if (event === "error") toast(data.message);
 });
 

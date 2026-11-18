@@ -164,6 +164,7 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `GET /api/photos/synced`, `POST /api/photos/upload?asset=&name=&created=` | photo backup |
 | `POST /api/control` | same JSON as WS control messages |
 | `GET /api/screen?w=1280&q=60` | JPEG screenshot |
+| `GET/POST /api/playback` | shared now-playing + recently played `{recent:[{id,at,pos,device}], now}`; POST `{id,pos,playing,device}`; pushes `playback` event |
 | `GET /api/devices`, `POST /api/phone` | paired phones; send command to phone |
 | `GET /ws?t=` | WebSocket |
 

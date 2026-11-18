@@ -4,17 +4,13 @@ import AppIntents
 
 /// Shared by the app and the widget extension (Dynamic Island / Lock Screen).
 struct MediaGridActivity: ActivityAttributes {
+    /// Transfer progress (music / media sync, photo backup). Music playback uses the system Now Playing UI instead.
     struct ContentState: Codable, Hashable {
-        var mode: String = "music"      // "music" | "sync"
-        var title: String = ""
-        var subtitle: String = ""
-        var playing: Bool = false
-        var start: Date = .now          // track start (for live progress)
-        var end: Date = .now            // track end
-        var progress: Double = 0        // used while paused
-        var syncDone: Int = 0
-        var syncTotal: Int = 0
-        var syncLabel: String = ""
+        var label: String = ""
+        var done: Int = 0
+        var total: Int = 0
+        var finished: Bool = false
+        var accent: [Double] = [0.10, 0.45, 0.91]   // r, g, b of the app accent colour
     }
     var pcName: String
 }

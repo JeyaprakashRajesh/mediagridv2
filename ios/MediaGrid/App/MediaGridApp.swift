@@ -12,6 +12,8 @@ struct MediaGridApp: App {
     @StateObject private var clip = ClipboardSync.shared
     @StateObject private var coord = Coordinator.shared
     @StateObject private var shared = SharedStore.shared
+    @AppStorage("mg.appearance") private var appearance = 0   // 0 system, 1 light, 2 dark
+    @AppStorage("mg.accent") private var accent = "blue"
 
     init() {
         PhotoSync.registerBackground()
@@ -30,8 +32,8 @@ struct MediaGridApp: App {
                 .environmentObject(clip)
                 .environmentObject(coord)
                 .environmentObject(shared)
-                .preferredColorScheme(.dark)
-                .tint(Theme.violet)
+                .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+                .tint(Theme.accent)
         }
         .onChange(of: phase) { _, p in
             switch p {

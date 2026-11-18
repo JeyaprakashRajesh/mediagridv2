@@ -40,6 +40,8 @@ pub struct App {
     pub events: broadcast::Sender<String>,
     pub devices: RwLock<HashMap<String, Device>>,
     pub shared: RwLock<Vec<SharedItem>>,
+    /// {"recent":[{id,at,pos,device}], "now":{id,pos,playing,device,at}} — shared by PC and phones.
+    pub playback: RwLock<serde_json::Value>,
     pub last_clip: Mutex<String>,
     pub synced: Mutex<HashSet<String>>,
     pub ui_token: String,
@@ -66,12 +68,17 @@ impl App {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        let playback: serde_json::Value = std::fs::read_to_string(config::data_dir().join("playback.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({ "recent": [], "now": null }));
         Arc::new(App {
             cfg: RwLock::new(cfg),
             lib: RwLock::new(Library::default()),
             events: tx,
             devices: RwLock::new(HashMap::new()),
             shared: RwLock::new(shared),
+            playback: RwLock::new(playback),
             last_clip: Mutex::new(String::new()),
             synced: Mutex::new(config::load_synced()),
             ui_token: config::random_hex(16),
@@ -113,6 +120,34 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Record what a device is playing and move it to the front of "recently played".
+    pub fn set_playback(&self, b: &serde_json::Value) -> serde_json::Value {
+        let id = b["id"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            return self.playback.read().clone();
+        }
+        let pos = b["pos"].as_f64().unwrap_or(0.0);
+        let playing = b["playing"].as_bool().unwrap_or(false);
+        let device = b["device"].as_str().unwrap_or("").to_string();
+        let at = now_ms();
+        let v = {
+            let mut p = self.playback.write();
+            let mut recent: Vec<serde_json::Value> = p["recent"].as_array().cloned().unwrap_or_default();
+            recent.retain(|r| r["id"].as_str() != Some(id.as_str()));
+            recent.insert(0, serde_json::json!({ "id": id, "at": at, "pos": pos, "device": device }));
+            recent.truncate(20);
+            *p = serde_json::json!({
+                "recent": recent,
+                "now": { "id": id, "pos": pos, "playing": playing, "device": device, "at": at }
+            });
+            p.clone()
+        };
+        if let Ok(j) = serde_json::to_string(&v) {
+            let _ = std::fs::write(config::data_dir().join("playback.json"), j);
+        }
+        v
     }
 
     /// Push an event to every connected phone.

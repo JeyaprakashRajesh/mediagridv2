@@ -11,66 +11,56 @@ import Combine
 @MainActor
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
-    private var activity: Activity<MediaGridActivity>?
     private var state = MediaGridActivity.ContentState()
     private var lastPush = Date.distantPast
-    private var lastKey = ""
+    private var endTask: Task<Void, Never>?
 
     private var enabled: Bool {
-        UserDefaults.standard.object(forKey: "mg.liveActivity") as? Bool ?? true
-            && ActivityAuthorizationInfo().areActivitiesEnabled
+        (UserDefaults.standard.object(forKey: "mg.liveActivity") as? Bool ?? true) && ActivityAuthorizationInfo().areActivitiesEnabled
     }
 
-    func nowPlaying(_ t: Track, playing: Bool, time: Double, duration: Double) {
-        state.mode = state.syncTotal > 0 ? state.mode : "music"
-        state.title = t.title
-        state.subtitle = t.artist
-        state.playing = playing
-        state.start = Date().addingTimeInterval(-time)
-        state.end = state.start.addingTimeInterval(max(duration, 1))
-        state.progress = duration > 0 ? time / duration : 0
-        let key = "\(t.id)-\(playing)"
-        // only push on meaningful changes (track / play state / seek), max 1 per second
-        guard key != lastKey || Date().timeIntervalSince(lastPush) > 15 else { return }
-        lastKey = key
-        push()
+    /// The single live activity. Any extra ones (from earlier launches or races) are ended so they never stack.
+    private func running() -> Activity<MediaGridActivity>? {
+        var keep: Activity<MediaGridActivity>?
+        for a in Activity<MediaGridActivity>.activities {
+            if keep == nil && a.activityState == .active { keep = a }
+            else if a.activityState == .active { Task { await a.end(nil, dismissalPolicy: .immediate) } }
+        }
+        return keep
     }
 
     func sync(done: Int, total: Int, label: String) {
-        state.syncDone = done
-        state.syncTotal = total
-        state.syncLabel = label
-        if Player.shared.current == nil { state.mode = "sync"; state.title = label }
-        guard Date().timeIntervalSince(lastPush) > 1 || done == total || done == 0 else { return }
+        endTask?.cancel()
+        state.label = label
+        state.done = done
+        state.total = total
+        state.finished = false
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        UIColor(Theme.accent).getRed(&r, green: &g, blue: &b, alpha: nil)
+        state.accent = [Double(r), Double(g), Double(b)]
+        guard Date().timeIntervalSince(lastPush) > 0.8 || done == 0 || done >= total else { return }
         push()
     }
 
+    /// Show "Done" briefly, then dismiss. No-op if nothing was running.
     func syncFinished() {
-        state.syncDone = 0
-        state.syncTotal = 0
-        if Player.shared.current == nil {
-            end()
-        } else {
-            state.mode = "music"
-            push()
-        }
+        guard let a = running() else { return }
+        state.finished = true
+        state.done = state.total
+        let content = ActivityContent(state: state, staleDate: nil)
+        endTask?.cancel()
+        endTask = Task { await a.end(content, dismissalPolicy: .after(Date().addingTimeInterval(4))) }
     }
 
     private func push() {
         lastPush = Date()
         guard enabled else { return }
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(3600))
-        if let a = activity, a.activityState == .active {
+        if let a = running() {
             Task { await a.update(content) }
         } else {
-            activity = try? Activity.request(attributes: MediaGridActivity(pcName: Connection.shared.pcName), content: content, pushType: nil)
+            _ = try? Activity.request(attributes: MediaGridActivity(pcName: Connection.shared.pcName), content: content, pushType: nil)
         }
-    }
-
-    func end() {
-        let a = activity
-        activity = nil
-        Task { await a?.end(nil, dismissalPolicy: .immediate) }
     }
 }
 
@@ -86,8 +76,8 @@ final class PhotoSync: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     @Published var total = 0
     @Published var status = ""
     @Published var lastSync: Date? = UserDefaults.standard.object(forKey: "mg.lastPhotoSync") as? Date
-    @Published var auto: Bool = UserDefaults.standard.object(forKey: "mg.autoPhotos") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(auto, forKey: "mg.autoPhotos") }
+    @Published var auto: Bool = UserDefaults.standard.object(forKey: "mg.autoPhotos2") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(auto, forKey: "mg.autoPhotos2") }
     }
     @Published var includeVideos: Bool = UserDefaults.standard.object(forKey: "mg.photoVideos") as? Bool ?? true {
         didSet { UserDefaults.standard.set(includeVideos, forKey: "mg.photoVideos") }
@@ -197,12 +187,21 @@ final class PhotoSync: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                                            file: tmp)
     }
 
+    /// Long-press → "Send to PC": uploads one photo/video; the PC saves it into its photo folder.
+    func send(_ a: PHAsset) async throws {
+        try await upload(a)
+        uploaded.insert(a.localIdentifier)
+        UserDefaults.standard.set(Array(uploaded), forKey: "mg.uploaded")
+    }
+
+    func isSent(_ a: PHAsset) -> Bool { uploaded.contains(a.localIdentifier) }
+
     // Background refresh
     nonisolated static func registerBackground() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: bgID, using: nil) { task in
             let t = Task { @MainActor in
                 Connection.shared.connect()
-                await PhotoSync.shared.syncNow()
+                if PhotoSync.shared.auto { await PhotoSync.shared.syncNow() }
                 task.setTaskCompleted(success: true)
             }
             task.expirationHandler = { t.cancel() }
@@ -281,6 +280,8 @@ final class Coordinator: ObservableObject {
             }
         case "library":
             Task { await MusicStore.shared.refresh() }
+        case "playback":
+            MusicStore.shared.applyPlayback(e.body["playback"])
         case "signedout":
             Connection.shared.signOut()
         case "command":

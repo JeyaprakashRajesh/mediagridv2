@@ -1,7 +1,6 @@
 import WidgetKit
 import SwiftUI
 import ActivityKit
-import AppIntents
 
 @main
 struct MediaGridWidgets: WidgetBundle {
@@ -10,119 +9,87 @@ struct MediaGridWidgets: WidgetBundle {
     }
 }
 
-private let pink = Color(red: 1, green: 0.37, blue: 0.64)
-private let violet = Color(red: 0.56, green: 0.42, blue: 1)
-private let cyan = Color(red: 0.18, green: 0.83, blue: 1)
-private let brand = LinearGradient(colors: [pink, violet, cyan], startPoint: .topLeading, endPoint: .bottomTrailing)
+private extension MediaGridActivity.ContentState {
+    var tint: Color { accent.count == 3 ? Color(red: accent[0], green: accent[1], blue: accent[2]) : .blue }
+    var fraction: Double { min(1, Double(done) / Double(max(total, 1))) }
+    var percent: Int { Int((fraction * 100).rounded()) }
+    var icon: String { finished ? "checkmark" : label.localizedCaseInsensitiveContains("music") ? "music.note"
+                       : label.localizedCaseInsensitiveContains("photo") || label.localizedCaseInsensitiveContains("media") ? "photo.on.rectangle" : "arrow.down" }
+    var headline: String { finished ? "\(label) · Done" : label }
+    var detail: String { finished ? "\(total) item\(total == 1 ? "" : "s") transferred" : "\(done) of \(total)" }
+}
 
 struct MediaGridLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MediaGridActivity.self) { ctx in
             LockScreenView(state: ctx.state, pc: ctx.attributes.pcName)
-                .activityBackgroundTint(Color.black.opacity(0.55))
+                .activityBackgroundTint(Color.black.opacity(0.35))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { ctx in
             let s = ctx.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Badge(state: s, size: 52).padding(.leading, 4)
+                    Ring(state: s, size: 46).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if s.mode == "music" {
-                        Button(intent: PlayPauseIntent()) {
-                            Image(systemName: s.playing ? "pause.fill" : "play.fill").font(.title2)
-                        }
-                        .buttonStyle(.plain).padding(.trailing, 6)
-                    } else {
-                        Text("\(s.syncDone)/\(s.syncTotal)").font(.headline.monospacedDigit())
-                    }
+                    Text(s.finished ? "Done" : "\(s.percent)%")
+                        .font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(s.tint)
+                        .contentTransition(.numericText()).padding(.trailing, 6)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(s.mode == "music" ? s.title : s.syncLabel).font(.headline).lineLimit(1)
-                        Text(s.mode == "music" ? s.subtitle : "MediaGrid").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        Text(s.label).font(.headline).lineLimit(1)
+                        Text(s.detail).font(.subheadline).foregroundStyle(.secondary).contentTransition(.numericText())
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 8) {
-                        ActivityProgress(state: s)
-                        if s.mode == "music" {
-                            HStack(spacing: 44) {
-                                Button(intent: PreviousTrackIntent()) { Image(systemName: "backward.fill") }
-                                Button(intent: PlayPauseIntent()) { Image(systemName: s.playing ? "pause.fill" : "play.fill").font(.title2) }
-                                Button(intent: NextTrackIntent()) { Image(systemName: "forward.fill") }
-                            }
-                            .buttonStyle(.plain).font(.title3)
-                        }
-                    }
-                    .padding(.horizontal, 6)
+                    Bar(state: s).padding(.horizontal, 6).padding(.top, 2)
                 }
             } compactLeading: {
-                Badge(state: s, size: 22)
+                Image(systemName: s.icon).foregroundStyle(s.tint).symbolEffect(.pulse, isActive: !s.finished)
             } compactTrailing: {
-                if s.mode == "music" {
-                    Bars(playing: s.playing)
-                } else {
-                    ProgressRing(value: Double(s.syncDone) / Double(max(s.syncTotal, 1))).frame(width: 18, height: 18)
-                }
+                Ring(state: s, size: 20, showIcon: false)
             } minimal: {
-                if s.mode == "music" { Bars(playing: s.playing) }
-                else { ProgressRing(value: Double(s.syncDone) / Double(max(s.syncTotal, 1))).frame(width: 18, height: 18) }
+                Ring(state: s, size: 20, showIcon: false)
             }
-            .keylineTint(violet)
+            .keylineTint(s.tint)
         }
     }
 }
 
-struct Badge: View {
+/// Circular progress with the activity icon inside.
+struct Ring: View {
     let state: MediaGridActivity.ContentState
     let size: CGFloat
+    var showIcon = true
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(brand)
-            Image(systemName: state.mode == "music" ? "music.note" : "arrow.triangle.2.circlepath")
-                .font(.system(size: size * 0.45, weight: .bold)).foregroundStyle(.white)
+            Circle().stroke(.white.opacity(0.18), lineWidth: size * 0.11)
+            Circle().trim(from: 0, to: state.fraction)
+                .stroke(state.tint, style: StrokeStyle(lineWidth: size * 0.11, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.smooth, value: state.fraction)
+            if showIcon {
+                Image(systemName: state.icon).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(state.tint)
+                    .contentTransition(.symbolEffect(.replace))
+            }
         }
         .frame(width: size, height: size)
     }
 }
 
-struct Bars: View {
-    let playing: Bool
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach([0.5, 1.0, 0.7], id: \.self) { h in
-                Capsule().fill(brand).frame(width: 3, height: playing ? 14 * h : 4)
-            }
-        }
-        .frame(height: 14)
-    }
-}
-
-struct ProgressRing: View {
-    let value: Double
-    var body: some View {
-        ZStack {
-            Circle().stroke(.white.opacity(0.2), lineWidth: 3)
-            Circle().trim(from: 0, to: value).stroke(brand, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
-        }
-    }
-}
-
-struct ActivityProgress: View {
+struct Bar: View {
     let state: MediaGridActivity.ContentState
     var body: some View {
-        if state.mode == "music" {
-            if state.playing && state.end > Date() {
-                ProgressView(timerInterval: state.start...state.end, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
-                    .tint(violet)
-            } else {
-                ProgressView(value: min(max(state.progress, 0), 1)).tint(violet)
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.18))
+                Capsule().fill(state.tint).frame(width: max(8, g.size.width * state.fraction))
+                    .animation(.smooth, value: state.fraction)
             }
-        } else {
-            ProgressView(value: Double(state.syncDone), total: Double(max(state.syncTotal, 1))).tint(pink)
         }
+        .frame(height: 8)
     }
 }
 
@@ -131,19 +98,21 @@ struct LockScreenView: View {
     let pc: String
     var body: some View {
         HStack(spacing: 14) {
-            Badge(state: state, size: 56)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(state.mode == "music" ? state.title : state.syncLabel).font(.headline).lineLimit(1)
-                Text(state.mode == "music" ? state.subtitle : "\(state.syncDone) of \(state.syncTotal) · \(pc)").font(.subheadline)
-                    .foregroundStyle(.secondary).lineLimit(1)
-                ActivityProgress(state: state)
-            }
-            if state.mode == "music" {
-                HStack(spacing: 14) {
-                    Button(intent: PlayPauseIntent()) { Image(systemName: state.playing ? "pause.fill" : "play.fill").font(.title2) }
-                    Button(intent: NextTrackIntent()) { Image(systemName: "forward.fill").font(.title3) }
+            Ring(state: state, size: 54)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(state.headline).font(.headline).lineLimit(1)
+                    Spacer()
+                    Text("\(state.percent)%").font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(state.tint)
+                        .contentTransition(.numericText())
                 }
-                .buttonStyle(.plain)
+                Bar(state: state)
+                HStack {
+                    Text(state.detail).contentTransition(.numericText())
+                    Spacer()
+                    Text(pc).lineLimit(1)
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(16)

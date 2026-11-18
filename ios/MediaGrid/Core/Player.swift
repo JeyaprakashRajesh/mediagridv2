@@ -87,6 +87,28 @@ final class Player: ObservableObject {
         load()
     }
 
+    /// Continue a song from "Recently played" at the position where it was left.
+    func playRecent(_ t: Track, in list: [Track], pos: Double = 0) {
+        play(list, start: t, source: "Recently played")
+        if pos > 3 { seek(pos) }
+    }
+
+    private var lastPost = Date.distantPast
+    /// Tell the PC what is playing so any device can pick it up.
+    private func postPlayback(force: Bool = true) {
+        guard let t = current, Connection.shared.isSignedIn else { return }
+        guard force || Date().timeIntervalSince(lastPost) > 10 else { return }
+        lastPost = Date()
+        let body: [String: Any] = ["id": t.id, "pos": time, "playing": isPlaying, "device": UIDevice.current.name]
+        Task { try? await Connection.shared.post("/api/playback", json: body) }
+    }
+
+    private func saveResume() {
+        guard let t = current else { return }
+        UserDefaults.standard.set(t.id, forKey: "mg.resumeID")
+        UserDefaults.standard.set(time, forKey: "mg.resumeTime")
+    }
+
     func shuffleAll() {
         play(MusicStore.shared.tracks, shuffle: true, source: "All Songs")
     }
@@ -168,7 +190,10 @@ final class Player: ObservableObject {
         player.replaceCurrentItem(with: item)
         player.play()
         isPlaying = true
+        MusicStore.shared.noteStarted(t)
+        saveResume()
         publish()
+        postPlayback()
         loadArtwork(t)
         prefetchNext()
         Task { await Connection.shared.sendStatus() }
@@ -188,9 +213,11 @@ final class Player: ObservableObject {
     }
 
     func pause() {
+        saveResume()
         player.pause()
         isPlaying = false
         publish()
+        postPlayback()
         Task { await Connection.shared.sendStatus() }
     }
 
@@ -199,6 +226,7 @@ final class Player: ObservableObject {
         player.play()
         isPlaying = true
         publish()
+        postPlayback()
         Task { await Connection.shared.sendStatus() }
     }
 
@@ -224,6 +252,7 @@ final class Player: ObservableObject {
         player.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         time = s
         publish()
+        postPlayback()
     }
 
     private func finished() {
@@ -237,6 +266,8 @@ final class Player: ObservableObject {
     private func tick(_ s: Double) {
         guard s.isFinite else { return }
         time = s
+        if Int(s) % 5 == 0 { saveResume() }
+        if isPlaying { postPlayback(force: false) }
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0 { duration = d }
         buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         if !counted, let t = current, s > min(30, duration * 0.5) {
@@ -272,7 +303,6 @@ final class Player: ObservableObject {
         if let artwork { info[MPMediaItemPropertyArtwork] = artwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
-        LiveActivityManager.shared.nowPlaying(t, playing: isPlaying, time: time, duration: duration)
     }
 
     private func setupRemote() {

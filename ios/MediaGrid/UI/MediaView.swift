@@ -1,20 +1,22 @@
 import SwiftUI
 import AVKit
+import Photos
 
 struct MediaView: View {
     @EnvironmentObject var media: MediaStore
     @EnvironmentObject var conn: Connection
-    @State private var filter = 0 // 0 all, 1 photos, 2 videos, 3 iPhone
+    @State private var filter = 0 // 0 all, 1 photos, 2 videos (PC media only), 3 this iPhone's own library
     @State private var selected: MediaItem?
     @State private var columns = 3
     @Namespace private var ns
 
+    /// All / Photos / Videos only ever show what is on the PC (not what this iPhone backed up).
     private var list: [MediaItem] {
+        let pc = media.items.filter { !$0.from_iphone }
         switch filter {
-        case 1: return media.items.filter { !$0.isVideo }
-        case 2: return media.items.filter(\.isVideo)
-        case 3: return media.items.filter(\.from_iphone)
-        default: return media.items
+        case 1: return pc.filter { !$0.isVideo }
+        case 2: return pc.filter(\.isVideo)
+        default: return pc
         }
     }
 
@@ -44,6 +46,9 @@ struct MediaView: View {
                         .pickerStyle(.segmented)
                         .padding(.horizontal, 20)
 
+                        if filter == 3 {
+                            PhoneLibraryGrid(columns: columns)
+                        } else {
                         if media.syncing {
                             HStack {
                                 ProgressView(value: Double(media.syncDone), total: Double(max(media.syncTotal, 1))).tint(Theme.violet)
@@ -79,13 +84,16 @@ struct MediaView: View {
                                 .padding(.horizontal, 3)
                             }
                         }
+                        }
                     }
                     .padding(.bottom, 60)
                 }
                 .refreshable { await media.refresh() }
+                .trackScrollDirection()
             }
-            .navigationTitle("Media")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Text("Media").font(.title2.weight(.bold)) }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Menu {
                         Picker("Grid", selection: $columns.animation(.smooth)) {
@@ -97,7 +105,7 @@ struct MediaView: View {
                     Button { media.syncAll(list); Haptics.tap() } label: {
                         Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: media.syncing)
                     }
-                    .disabled(media.syncing || conn.state != .online)
+                    .disabled(media.syncing || conn.state != .online || filter == 3)
                 }
             }
             .fullScreenCover(item: $selected) { m in
@@ -140,23 +148,35 @@ struct MediaViewer: View {
     let start: MediaItem
     @EnvironmentObject var media: MediaStore
     @Environment(\.dismiss) private var dismiss
-    @State private var current: String = ""
+    @State private var current: String?
     @State private var chrome = true
     @State private var saved = false
+
+    init(items: [MediaItem], start: MediaItem) {
+        self.items = items; self.start = start
+        _current = State(initialValue: start.id)
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            TabView(selection: $current) {
-                ForEach(window, id: \.id) { m in
-                    Group {
-                        if m.isVideo { StreamVideo(url: media.fileURL(m), active: current == m.id) }
-                        else { ZoomablePhoto(item: m) }
+            // Paging scroll view: swipe left / right between every photo and video, like the Photos app.
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(items) { m in
+                        Group {
+                            if m.isVideo { StreamVideo(url: media.fileURL(m), active: current == m.id) }
+                            else { ZoomablePhoto(item: m) }
+                        }
+                        .containerRelativeFrame([.horizontal, .vertical])
+                        .id(m.id)
                     }
-                    .tag(m.id)
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $current)
+            .scrollIndicators(.hidden)
             .ignoresSafeArea()
             .onTapGesture { withAnimation { chrome.toggle() } }
 
@@ -187,15 +207,9 @@ struct MediaViewer: View {
                 .transition(.opacity)
             }
         }
-        .onAppear { current = start.id }
+        .environment(\.colorScheme, .dark)
         .onChange(of: current) { _, _ in saved = false }
         .statusBarHidden(!chrome)
-    }
-
-    /// Only build pages near the current one so huge libraries stay fast.
-    private var window: [MediaItem] {
-        guard let i = items.firstIndex(where: { $0.id == (current.isEmpty ? start.id : current) }) else { return [start] }
-        return Array(items[max(0, i - 15)..<min(items.count, i + 16)])
     }
 }
 
@@ -220,8 +234,8 @@ struct ZoomablePhoto: View {
             MagnifyGesture()
                 .onChanged { scale = max(1, last * $0.magnification) }
                 .onEnded { _ in last = scale; if scale <= 1 { withAnimation(.spring) { offset = .zero } } }
-                .simultaneously(with: DragGesture().onChanged { v in if scale > 1 { offset = v.translation } })
         )
+        .gesture(DragGesture().onChanged { offset = $0.translation }, including: scale > 1 ? .all : .none)
         .onTapGesture(count: 2) {
             withAnimation(.spring) { scale = scale > 1 ? 1 : 2.5; last = scale; offset = .zero }
         }
@@ -239,5 +253,103 @@ struct StreamVideo: View {
             .onAppear { if player == nil { player = AVPlayer(url: url) } ; if active { player?.play() } }
             .onChange(of: active) { _, a in a ? player?.play() : player?.pause() }
             .onDisappear { player?.pause() }
+    }
+}
+
+
+// MARK: - This iPhone's own photos: long-press → Send to PC
+
+struct PhoneLibraryGrid: View {
+    let columns: Int
+    @EnvironmentObject var photos: PhotoSync
+    @EnvironmentObject var coord: Coordinator
+    @EnvironmentObject var conn: Connection
+    @State private var assets: PHFetchResult<PHAsset>?
+    @State private var sending: Set<String> = []
+    @State private var tick = 0
+
+    private var allowed: Bool { photos.authorization == .authorized || photos.authorization == .limited }
+
+    var body: some View {
+        let _ = tick
+        Group {
+            if allowed, let assets {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: columns), spacing: 3) {
+                    ForEach(0..<min(assets.count, 600), id: \.self) { i in
+                        let a = assets[i]
+                        PhoneTile(asset: a, sending: sending.contains(a.localIdentifier), sent: photos.isSent(a))
+                            .contextMenu {
+                                Button { send(a) } label: { Label(photos.isSent(a) ? "Send to PC again" : "Send to PC", systemImage: "paperplane") }
+                                    .disabled(conn.state != .online)
+                            }
+                    }
+                }
+                .padding(.horizontal, 3)
+            } else {
+                ContentUnavailableView {
+                    Label("Your iPhone photos", systemImage: "iphone")
+                } description: {
+                    Text("Allow access to pick photos and videos to send to your PC.")
+                } actions: {
+                    Button("Allow Photos Access") { Task { await photos.requestAccess(); load() } }.buttonStyle(.glassProminent)
+                }
+                .padding(.top, 60)
+            }
+        }
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        guard allowed else { return }
+        let o = PHFetchOptions()
+        o.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        assets = PHAsset.fetchAssets(with: o)
+    }
+
+    private func send(_ a: PHAsset) {
+        let id = a.localIdentifier
+        sending.insert(id)
+        Task {
+            do { try await photos.send(a); Haptics.success(); coord.show("Sent to PC") }
+            catch { coord.show("Couldn't send: \(error.localizedDescription)") }
+            sending.remove(id); tick += 1
+        }
+    }
+}
+
+struct PhoneTile: View {
+    let asset: PHAsset
+    let sending: Bool
+    let sent: Bool
+    @State private var image: UIImage?
+
+    var body: some View {
+        Color.gray.opacity(0.15)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
+            .clipped()
+            .overlay(alignment: .bottomLeading) {
+                if asset.mediaType == .video {
+                    Image(systemName: "play.fill").font(.caption2).padding(6).glassEffect(.regular, in: .circle).padding(5)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if sending { ProgressView().controlSize(.small).padding(6).glassEffect(.regular, in: .circle).padding(5) }
+                else if sent { Image(systemName: "checkmark").font(.caption2.weight(.bold)).padding(6).glassEffect(.regular, in: .circle).padding(5) }
+            }
+            .contentShape(Rectangle())
+            .task(id: asset.localIdentifier) { image = await thumbnail() }
+    }
+
+    private func thumbnail() async -> UIImage? {
+        await withCheckedContinuation { c in
+            let o = PHImageRequestOptions()
+            o.deliveryMode = .highQualityFormat   // single callback
+            o.resizeMode = .fast
+            o.isNetworkAccessAllowed = true
+            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: o) { img, _ in
+                c.resume(returning: img)
+            }
+        }
     }
 }
