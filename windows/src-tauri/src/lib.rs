@@ -2,10 +2,12 @@ mod clip;
 mod config;
 mod control;
 mod genre;
+mod lyrics;
 mod library;
 mod popularity;
 mod server;
 mod state;
+mod vcam;
 
 use serde_json::{json, Value};
 use state::{App, Shared};
@@ -30,6 +32,33 @@ fn addresses() -> Vec<Value> {
     out.sort_by_key(|v| if v["kind"] == "tailscale" { 0 } else { 1 });
     out
 }
+
+/// Drag & drop onto the window: offer the files to the phone.
+#[tauri::command]
+fn send_files(app: State<Shared>, paths: Vec<String>) {
+    for p in paths {
+        let p = std::path::PathBuf::from(p);
+        if p.is_file() { app.share_file(&p); }
+    }
+}
+
+/// Files passed on the command line (Explorer's "Send to" menu) go to the phone too.
+fn share_args(app: &Shared, args: &[String]) {
+    for a in args.iter().skip(1) {
+        let p = std::path::Path::new(a);
+        if p.is_file() { app.share_file(p); }
+    }
+}
+
+/// Adds "MediaGrid (send to iPhone)" to Explorer's right-click > Send to menu.
+#[cfg(target_os = "windows")]
+fn install_sendto() {
+    let (Some(roaming), Ok(exe)) = (dirs::config_dir(), std::env::current_exe()) else { return };
+    let dir = roaming.join("Microsoft").join("Windows").join("SendTo");
+    let _ = std::fs::write(dir.join("MediaGrid (send to iPhone).cmd"), format!("@echo off\r\nstart \"\" \"{}\" %*\r\n", exe.display()));
+}
+#[cfg(not(target_os = "windows"))]
+fn install_sendto() {}
 
 #[tauri::command]
 fn get_info(app: State<Shared>) -> Value {
@@ -190,14 +219,19 @@ pub fn run() {
     }
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            share_args(app.state::<Shared>().inner(), &args);
+            show_main(app)
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder, allow_firewall])
+        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder, allow_firewall, send_files])
         .setup(move |app| {
             let _ = shared.handle.set(app.handle().clone());
+            install_sendto();
+            share_args(&shared, &std::env::args().collect::<Vec<_>>());
 
             if shared.cfg.read().autostart {
                 let _ = app.autolaunch().enable();

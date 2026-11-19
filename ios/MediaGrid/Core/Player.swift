@@ -23,6 +23,8 @@ final class Player: ObservableObject {
     @Published var source: String = ""
     @Published var collectionID: String?
     @Published var buffering = false
+    @Published private(set) var sleepAt: Date?          // pause (with a fade) when this time is reached
+    @Published private(set) var sleepAtSongEnd = false
 
     private let player = AVPlayer()
     private var timeObs: Any?
@@ -188,6 +190,7 @@ final class Player: ObservableObject {
         guard pos < order.count else { return }
         let t = queue[order[pos]]
         activateSession()
+        player.volume = 1
         current = t
         counted = false
         time = 0
@@ -211,6 +214,15 @@ final class Player: ObservableObject {
         // warm the art cache for the next song so the lock screen updates instantly
         if let n = upNext.first, let u = MusicStore.shared.artURL(n) { Task { _ = await ImageCache.shared.image(u) } }
     }
+
+    func setSleep(minutes: Int?) {
+        sleepAtSongEnd = false
+        sleepAt = minutes.map { Date().addingTimeInterval(Double($0) * 60) }
+        player.volume = 1
+    }
+
+    func sleepAfterSong() { sleepAt = nil; sleepAtSongEnd = true }
+    func cancelSleepAtSongEnd() { sleepAtSongEnd = false }
 
     func toggle() {
         if current == nil {
@@ -299,6 +311,7 @@ final class Player: ObservableObject {
     }
 
     private func finished() {
+        if sleepAtSongEnd { sleepAtSongEnd = false; pause(); return }
         if repeatMode == .one { seek(0); player.play(); return }
         if advanceIntoGenre() { return }
         if pos + 1 >= order.count && repeatMode == .off && !shuffle {
@@ -310,6 +323,10 @@ final class Player: ObservableObject {
     private func tick(_ s: Double) {
         guard s.isFinite else { return }
         time = s
+        if let end = sleepAt {
+            let left = end.timeIntervalSinceNow
+            if left <= 0 { sleepAt = nil; pause(); player.volume = 1 } else if left < 8 { player.volume = Float(left / 8) }   // fade out over the last 8 s
+        }
         if Int(s) % 5 == 0 { saveResume() }
         if isPlaying { postPlayback(force: false) }
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0 {

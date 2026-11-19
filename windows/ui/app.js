@@ -201,14 +201,16 @@ const player = {
     $("#np-art").style.backgroundImage = t.has_art ? `url('${url("/api/music/art/" + t.id)}')` : "";
     $$(".trow").forEach((r) => r.classList.toggle("playing", r.dataset.id === t.id));
     if ("mediaSession" in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album });
+    lyr.idx = -1; loadLyrics();
   },
+  enqueue(list) { if (!this.cur) return this.playList(list, 0); for (const t of list) { this.queue.push(t); this.order.push(this.queue.length - 1); } },
   next() { if (!this.queue.length) return; this.pos++; if (this.pos >= this.order.length) { this.buildOrder(this.order[0]); this.pos = 0; if (this.shuffle) this.buildOrder(Math.floor(Math.random() * this.queue.length)); } this.load(); },
   prev() { if (audio.currentTime > 3) { audio.currentTime = 0; return; } this.pos = Math.max(0, this.pos - 1); this.load(); },
   toggle() { if (!this.cur) return tracks.length && this.playList(tracks, 0); audio.paused ? audio.play() : audio.pause(); },
 };
 audio.onended = () => (player.repeat ? (audio.currentTime = 0, audio.play()) : player.next());
 audio.onplay = audio.onpause = () => { postPlayback(); $("#p-play").innerHTML = audio.paused ? ICON.play : ICON.pause; $("#player").classList.toggle("is-playing", !audio.paused); };
-audio.ontimeupdate = () => { if (!audio.paused) postPlayback(false); $("#p-cur").textContent = fmtTime(audio.currentTime); $("#p-dur").textContent = fmtTime(audio.duration); if (!seeking) $("#p-seek").value = audio.duration ? (audio.currentTime / audio.duration) * 1000 : 0; };
+audio.ontimeupdate = () => { syncLyrics(); if (!audio.paused) postPlayback(false); $("#p-cur").textContent = fmtTime(audio.currentTime); $("#p-dur").textContent = fmtTime(audio.duration); if (!seeking) $("#p-seek").value = audio.duration ? (audio.currentTime / audio.duration) * 1000 : 0; };
 let seeking = false;
 $("#p-seek").oninput = () => (seeking = true);
 $("#p-seek").onchange = (e) => { if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration; seeking = false; };
@@ -426,6 +428,120 @@ $("#settings-save").onclick = async () => {
   toast("Settings saved"); refreshInfo();
 };
 
+/* ---------------- lyrics ---------------- */
+const lyr = { lines: [], plain: "", on: false, idx: -1 };
+async function loadLyrics() {
+  if (!lyr.on || !player.cur) return;
+  const id = player.cur.id, body = $("#lyrics-body");
+  body.textContent = "Looking for lyrics…"; lyr.lines = [];
+  try {
+    const d = await api("/api/music/lyrics/" + id);
+    if (player.cur?.id !== id) return;
+    lyr.lines = (d.synced || "").split("\n").map((l) => { const m = l.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return m ? { t: +m[1] * 60 + +m[2], s: m[3].trim() } : null; }).filter(Boolean);
+    body.innerHTML = lyr.lines.length ? lyr.lines.map((l, i) => `<p data-i="${i}">${esc(l.s) || "♪"}</p>`).join("")
+      : d.plain ? `<pre>${esc(d.plain)}</pre>` : "No lyrics found for this song.";
+    $$("#lyrics-body p").forEach((p) => (p.onclick = () => (audio.currentTime = lyr.lines[+p.dataset.i].t)));
+  } catch { body.textContent = "Couldn't load lyrics."; }
+}
+function syncLyrics() {
+  if (!lyr.on || !lyr.lines.length) return;
+  let i = lyr.lines.findIndex((l) => l.t > audio.currentTime + 0.2) - 1;
+  if (i === -2) i = lyr.lines.length - 1;
+  if (i === lyr.idx) return;
+  lyr.idx = i;
+  $$("#lyrics-body p").forEach((p, k) => p.classList.toggle("active", k === i));
+  $(`#lyrics-body p[data-i="${i}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+$("#p-lyrics").onclick = () => { lyr.on = !lyr.on; $("#lyrics-panel").hidden = !lyr.on; $("#p-lyrics").classList.toggle("on", lyr.on); loadLyrics(); };
+
+/* ---------------- lock when away ---------------- */
+async function loadPresence() {
+  try { const p = await api("/api/presence"); $("#away-on").checked = p.lock; $("#away-min").value = p.minutes; } catch { /* PC app not ready yet */ }
+}
+const savePresence = () => api("/api/presence", { method: "POST", json: { lock: $("#away-on").checked, minutes: +$("#away-min").value || 3 } }).catch((e) => toast(e.message));
+$("#away-on").onchange = savePresence;
+$("#away-min").onchange = savePresence;
+
+/* ---------------- drop files to send them to the iPhone ---------------- */
+T.webview?.getCurrentWebview?.().onDragDropEvent((e) => {
+  const p = e.payload;
+  if (p.type === "enter" || p.type === "over") $("#dropzone").hidden = false;
+  else {
+    $("#dropzone").hidden = true;
+    if (p.type === "drop" && p.paths?.length) invoke("send_files", { paths: p.paths }).then(() => toast(`Sent ${p.paths.length} file${p.paths.length > 1 ? "s" : ""} to your iPhone`));
+  }
+});
+
+/* ---------------- iPhone camera & mic ---------------- */
+const cam = { state: { camera: false, mic: false }, ctx: null, abort: null };
+
+function renderCam() {
+  const s = cam.state, img = $("#cam-view");
+  const on = [s.camera && "camera", s.mic && "microphone"].filter(Boolean);
+  $("#cam-status").textContent = on.length ? `Streaming from the iPhone: ${on.join(" + ")}` : "Off. Start it on the iPhone: PC tab → Access PC → Webcam & mic.";
+  if (s.camera) { if (!img.src.includes("cam.mjpg")) img.src = url("/cam.mjpg"); img.hidden = false; } else { img.removeAttribute("src"); img.hidden = true; }
+  $("#cam-url").value = url("/cam.mjpg").replace("127.0.0.1", "localhost");
+  if (s.mic && $("#cam-listen").checked) startMic(); else stopMic();
+  loadVcam();
+}
+
+/* The phone sends 16 kHz mono 16-bit PCM; play it with small buffering, on the chosen output device. */
+async function startMic() {
+  if (cam.abort) return;
+  const abort = (cam.abort = new AbortController());
+  try {
+    const ctx = (cam.ctx = new AudioContext({ sampleRate: 16000 }));
+    await ctx.resume();
+    const sink = $("#mic-out").value;
+    if (sink && ctx.setSinkId) await ctx.setSinkId(sink).catch(() => {});
+    const reader = (await fetch(url("/api/cam/audio"), { signal: abort.signal })).body.getReader();
+    let t = ctx.currentTime + 0.15, left = new Uint8Array(0);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const b = new Uint8Array(left.length + value.length); b.set(left); b.set(value, left.length);
+      const n = b.length - (b.length % 2); left = b.slice(n);
+      const pcm = new Int16Array(b.slice(0, n).buffer), f = new Float32Array(pcm.length);
+      for (let i = 0; i < pcm.length; i++) f[i] = pcm[i] / 32768;
+      const buf = ctx.createBuffer(1, f.length, 16000); buf.copyToChannel(f, 0);
+      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+      if (t < ctx.currentTime) t = ctx.currentTime + 0.1;   // fell behind: re-buffer
+      else if (t - ctx.currentTime > 0.6) continue;         // too far ahead (burst): drop it so the mic stays live
+      src.start(t); t += buf.duration;
+    }
+  } catch { /* stopped or phone went away */ }
+  if (cam.abort === abort) stopMic();
+}
+function stopMic() { cam.abort?.abort(); cam.abort = null; cam.ctx?.close().catch(() => {}); cam.ctx = null; }
+
+async function loadVcam() {
+  try {
+    const v = await api("/api/vcam");
+    $("#vcam-install").hidden = !(v.available && !v.installed);
+    $("#vcam-flip").checked = v.flip;
+    $("#vcam-status").textContent = !v.available ? "The virtual camera is not included in this build."
+      : !v.installed ? "Install it once (Windows asks for permission). Then start the camera on the iPhone and pick “DirectShow Softcam” as the camera in Zoom, Teams, Chrome or OBS."
+      : v.on ? "On. Pick “DirectShow Softcam” as the camera in your video app." : "Installed. It switches on when the iPhone camera starts. Pick “DirectShow Softcam” as the camera in your video app.";
+  } catch (e) { $("#vcam-status").textContent = String(e.message || e); }
+}
+$("#vcam-install").onclick = async () => {
+  try { await api("/api/vcam/install", { method: "POST" }); toast("Virtual camera installed"); } catch (e) { toast(e.message); }
+  loadVcam();
+};
+$("#vcam-flip").onchange = () => api("/api/vcam", { method: "POST", json: { flip: $("#vcam-flip").checked } });
+
+$("#cam-listen").onchange = renderCam;
+$("#cam-copy").onclick = () => { navigator.clipboard.writeText($("#cam-url").value); toast("Address copied"); };
+$("#cam-outputs").onclick = async () => {
+  try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((t) => t.stop()); } catch { /* names stay generic without permission */ }
+  const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+  $("#mic-out").innerHTML = `<option value="">Default speakers</option>` + outs.map((d) => `<option value="${esc(d.deviceId)}">${esc(d.label || "Audio output")}</option>`).join("");
+  const virt = outs.find((d) => /cable|virtual|vb-audio/i.test(d.label));
+  if (virt) $("#mic-out").value = virt.deviceId;
+  stopMic(); renderCam();
+};
+$("#mic-out").onchange = () => { stopMic(); renderCam(); };
+
 /* ---------------- boot ---------------- */
 async function refreshInfo() {
   info = await invoke("get_info");
@@ -454,11 +570,18 @@ T.event.listen("mg", ({ payload }) => {
     renderCalls();
   }
   else if (event === "playlists") { playlists = data; loadTracks(); }
+  else if (event === "cam") { cam.state = data; renderCam(); }
+  else if (event === "pcplay") {
+    const list = (data.ids || []).map((id) => tracks.find((t) => t.id === id)).filter(Boolean);
+    if (list.length) { data.mode === "queue" ? player.enqueue(list) : player.playList(list, 0); toast(data.mode === "queue" ? "Added to the PC queue" : `Playing ${list[0].title}`); }
+  }
   else if (event === "error") toast(data.message);
 });
 
 (async () => {
   await refreshInfo();
+  api("/api/cam/state").then((s) => { cam.state = s; renderCam(); }).catch(() => {});
+  loadPresence();
   await loadTracks();
   loadShared();
   if (!info.hasAccount) { showTab("profile"); toast("Create an account to pair your iPhone"); }

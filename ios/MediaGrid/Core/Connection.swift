@@ -133,7 +133,9 @@ final class Connection: ObservableObject {
         var r = URLRequest(url: u)
         r.timeoutInterval = 4
         guard let (d, _) = try? await session.data(for: r) else { return nil }
-        return try? JSONDecoder().decode(ServerInfo.self, from: d)
+        let info = try? JSONDecoder().decode(ServerInfo.self, from: d)
+        if let m = info?.mac { UserDefaults.standard.set(m, forKey: "mg.pcMac") }   // for Wake-on-LAN
+        return info
     }
 
     func signIn(host raw: String, email: String, password: String) async throws {

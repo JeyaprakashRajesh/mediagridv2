@@ -596,6 +596,9 @@ struct TrackRow: View {
     }
 
     @ViewBuilder private var menuItems: some View {
+        Button { Task { try? await Connection.shared.post("/api/pc/play", json: ["ids": [track.id], "mode": "play"]) } } label: { Label("Play on PC", systemImage: "desktopcomputer") }
+        Button { Task { try? await Connection.shared.post("/api/pc/play", json: ["ids": [track.id], "mode": "queue"]) } } label: { Label("Add to PC queue", systemImage: "text.line.last.and.arrowtriangle.forward") }
+        Divider()
         Button { player.playNext(track) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         Button { player.addToQueue(track) } label: { Label("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") }
         Button { music.toggleLike(track) } label: {

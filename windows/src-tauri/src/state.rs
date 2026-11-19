@@ -234,6 +234,23 @@ impl App {
         let _ = self.events.send(v.to_string());
     }
 
+    /// Copy a PC file into the inbox and offer it to the phone (drag & drop, "Send to" menu).
+    pub fn share_file(self: &Shared, src: &std::path::Path) {
+        let Some(name) = src.file_name().map(|s| s.to_string_lossy().to_string()) else { return };
+        let dir = std::path::PathBuf::from(self.cfg.read().inbox_dir.clone());
+        let _ = std::fs::create_dir_all(&dir);
+        let mut dest = dir.join(&name);
+        let mut i = 1;
+        while dest.exists() { dest = dir.join(format!("{i}-{name}")); i += 1; }
+        if std::fs::copy(src, &dest).is_err() { return; }
+        self.add_shared(SharedItem {
+            id: config::random_hex(8), kind: "file".into(), text: None,
+            name: dest.file_name().map(|s| s.to_string_lossy().to_string()),
+            size: std::fs::metadata(&dest).map(|m| m.len()).ok(),
+            path: Some(dest.to_string_lossy().to_string()), from: "pc".into(), at: now_ms(),
+        });
+    }
+
     pub fn add_shared(&self, item: SharedItem) {
         {
             let mut s = self.shared.write();

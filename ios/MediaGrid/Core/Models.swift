@@ -76,6 +76,7 @@ struct ServerInfo: Codable {
     let name: String
     let version: String
     let account: Bool
+    let mac: String?
 }
 
 struct DiscoveredPC: Identifiable, Hashable {

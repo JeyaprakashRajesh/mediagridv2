@@ -317,6 +317,18 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px;
 .tile-btn svg { width: 22px; height: 22px; color: var(--accent-text); }
 .tile-btn.danger svg { color: var(--muted); }
 .calls h3 { margin-bottom: 14px; }
+.lyrics { position: fixed; right: 20px; bottom: 104px; width: 380px; max-height: 52vh; overflow: auto; padding: 18px 20px; border-radius: 22px; z-index: 30; }
+.lyrics p { margin: 0 0 12px; font-size: 18px; font-weight: 700; opacity: .4; transition: opacity .2s, transform .2s; transform-origin: left; cursor: default; }
+.lyrics p.active { opacity: 1; transform: scale(1.03); }
+.lyrics pre { white-space: pre-wrap; font: inherit; opacity: .85; margin: 0; }
+#dropzone { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); }
+#dropzone div { padding: 36px 56px; border: 2px dashed var(--accent); border-radius: 26px; font-size: 20px; font-weight: 700; color: var(--text); }
+#dropzone[hidden], .lyrics[hidden] { display: none; }
+.phonecam { margin-top: 14px; display: grid; gap: 12px; }
+.phonecam img { width: 100%; max-height: 360px; object-fit: contain; border-radius: 14px; background: #000; }
+.phonecam .row { display: flex; gap: 10px; align-items: center; }
+.phonecam input[readonly], .phonecam select { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--stroke-2); background: var(--hover); color: var(--text); }
+.phonecam .small { font-size: 12px; }
 .call-live { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 18px; background: rgba(var(--accent-rgb),0.16); border: 1px solid rgba(var(--accent-rgb),0.4); margin-bottom: 12px; }
 .call-live b { display: block; }
 .call-live span { font-size: 12.5px; color: var(--muted); }

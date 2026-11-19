@@ -49,6 +49,8 @@ targets:
         NSLocalNetworkUsageDescription: "MediaGrid finds and talks to the MediaGrid app on your PC over Wi-Fi or Tailscale."
         NSBonjourServices:
           - _mediagrid._tcp
+        NSCameraUsageDescription: "MediaGrid can use this iPhone as your PC's webcam when you start it."
+        NSMicrophoneUsageDescription: "MediaGrid can use this iPhone as your PC's microphone when you start it."
         NSPhotoLibraryUsageDescription: "MediaGrid backs up your new photos and videos to your PC."
         NSPhotoLibraryAddUsageDescription: "MediaGrid saves photos and videos from your PC into Photos."
         UIBackgroundModes:

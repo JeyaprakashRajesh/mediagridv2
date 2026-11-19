@@ -40,6 +40,15 @@ struct PCView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .glassEffect(.regular, in: .capsule)
+            if !online, let mac = UserDefaults.standard.string(forKey: "mg.pcMac") {
+                Button {
+                    let ok = WakeOnLAN.send(mac: mac, host: conn.host)
+                    Coordinator.shared.show(ok ? "Wake signal sent" : "Couldn't send the wake signal")
+                    Haptics.soft()
+                } label: { Image(systemName: "power").font(.subheadline.weight(.bold)).frame(width: 36, height: 36) }
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel("Wake PC")
+            }
         }
         .padding(.horizontal, 20).padding(.top, 6)
     }
@@ -73,6 +82,8 @@ struct AccessPCView: View {
                     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26))
                 }
                 .buttonStyle(.plain)
+
+                WebcamCard()
 
                 GlassCard {
                     VStack(alignment: .leading, spacing: 16) {
@@ -150,29 +161,59 @@ struct AccessPCView: View {
     }
 }
 
+/// Use the iPhone as the PC's camera, microphone, or both.
+struct WebcamCard: View {
+    @ObservedObject private var streamer = PhoneStreamer.shared
+    @EnvironmentObject var conn: Connection
+    @AppStorage("mg.camMode") private var mode = 0     // 0 camera, 1 mic, 2 both
+    @AppStorage("mg.camBack") private var back = false
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) { IconBadge(symbol: "video.fill", color: Theme.pink, size: 30); Text("Webcam & mic").font(.headline) }
+                Text("Use this iPhone as your PC's camera, microphone, or both.").font(.caption).foregroundStyle(.secondary)
+                Picker("Use", selection: $mode) { Text("Camera").tag(0); Text("Mic").tag(1); Text("Both").tag(2) }
+                    .pickerStyle(.segmented).disabled(streamer.running)
+                if mode != 1 {
+                    Picker("Lens", selection: $back) { Text("Front").tag(false); Text("Back").tag(true) }
+                        .pickerStyle(.segmented).disabled(streamer.running)
+                }
+                Button {
+                    Task { if streamer.running { await streamer.stop() } else { await streamer.start(camera: mode != 1, mic: mode != 0, back: back) } }
+                    Haptics.soft()
+                } label: {
+                    Label(streamer.running ? "Stop" : "Start streaming", systemImage: streamer.running ? "stop.fill" : "play.fill")
+                        .frame(maxWidth: .infinity).padding(.vertical, 4)
+                }
+                .buttonStyle(.glassProminent).tint(streamer.running ? Theme.pink : Theme.accent).foregroundStyle(.white)
+                .disabled(!streamer.running && conn.state != .online)
+                if let e = streamer.error { Text(e).font(.caption).foregroundStyle(Theme.pink) }
+                Text("Keep MediaGrid open while the camera is on. On the PC it shows under Mobile → iPhone as webcam & mic.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
 // MARK: - Remote desktop
 
-/// Live screen with three ways to drive the pointer: touch (tap/drag where you want it), trackpad (relative) and scroll.
+/// Remote desktop: a hardware-decoded H.264 stream, with three ways to drive the pointer:
+/// touch (tap/drag where you want it), trackpad (relative) and scroll.
 struct RemoteDesktopView: View {
     @EnvironmentObject var conn: Connection
-    @State private var connected = false
-    @State private var image: UIImage?
-    @State private var fps = 0.0
-    @State private var error: String?
+    @StateObject private var stream = ScreenStream()
+    @State private var audio = PCAudio()
+    @AppStorage("mg.pcSound") private var pcSound = true
     @State private var mode = 0           // 0 touch, 1 trackpad, 2 scroll
     @State private var quality = 1
-    @State private var session = 0
-    @State private var seq = 0
-    @State private var shown = 0
-    @State private var frames = 0
-    @State private var since = Date()
     @State private var last: CGPoint?
     @State private var lastSent = Date.distantPast
     @State private var text = " "
     @FocusState private var typing: Bool
     @AppStorage("mg.sensitivity") private var sensitivity = 1.6
 
-    private static let presets: [(name: String, w: Int, q: Int)] = [("Fast", 960, 40), ("Balanced", 1280, 55), ("Sharp", 1920, 75)]
+    private static let presets: [(name: String, w: Int, fps: Int, kbps: Int)] = [("Fast", 960, 30, 2500), ("Balanced", 1280, 30, 5000), ("Sharp", 1920, 30, 10000)]
     private static let keys: [[String]] = [["esc", "esc"], ["tab", "tab"], ["↵", "enter"], ["⊞", "win"], ["Alt+Tab", "alt+tab"],
                                            ["Copy", "ctrl+c"], ["Paste", "ctrl+v"], ["Desktop", "win+d"], ["Close", "alt+f4"]]
 
@@ -182,27 +223,28 @@ struct RemoteDesktopView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     screen
-                    if connected { controls } else { connectCard }
+                    if stream.connected { controls } else { connectCard }
                 }
                 .padding(.horizontal, 16).padding(.bottom, 40)
             }
         }
         .navigationTitle("Remote desktop")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(connected)-\(session)-\(quality)") {
-            guard connected else { return }
-            async let a: Void = pump(delay: 0)
-            async let b: Void = pump(delay: 45)   // two requests in flight keeps the stream moving while one decodes
-            _ = await (a, b)
-        }
-        .onDisappear { connected = false }
+        .onChange(of: quality) { _, _ in if stream.connected { connect() } }
+        .onDisappear { stream.stop(); audio.stop() }
+    }
+
+    private func connect() {
+        let p = Self.presets[quality]
+        stream.start(w: p.w, fps: p.fps, kbps: p.kbps)
+        if pcSound { audio.start(url: conn.url("/api/audio/stream"), session: conn.session) }
     }
 
     private var connectCard: some View {
         VStack(spacing: 12) {
-            Text(error ?? "Connect to see and control \(conn.pcName.isEmpty ? "your PC" : conn.pcName).").font(.subheadline)
+            Text(stream.error ?? "Connect to see and control \(conn.pcName.isEmpty ? "your PC" : conn.pcName).").font(.subheadline)
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button { error = nil; image = nil; session += 1; connected = true; Haptics.soft() } label: {
+            Button { connect(); Haptics.soft() } label: {
                 Label("Connect", systemImage: "play.display").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
             }
             .buttonStyle(.glassProminent).tint(Theme.accent).foregroundStyle(.white).disabled(conn.state != .online)
@@ -248,15 +290,16 @@ struct RemoteDesktopView: View {
             }
             .buttonStyle(.plain)
 
-            HStack {
-                Picker("Quality", selection: $quality) { ForEach(0..<3) { Text(Self.presets[$0].name).tag($0) } }.pickerStyle(.segmented)
-            }
+            Toggle(isOn: $pcSound) { Label("PC sound on this iPhone", systemImage: "speaker.wave.2") }
+                .font(.subheadline)
+                .onChange(of: pcSound) { _, on in if on { audio.start(url: conn.url("/api/audio/stream"), session: conn.session) } else { audio.stop() } }
+            Picker("Quality", selection: $quality) { ForEach(0..<3) { Text(Self.presets[$0].name).tag($0) } }.pickerStyle(.segmented)
             HStack {
                 Image(systemName: "speedometer").foregroundStyle(.secondary)
                 Slider(value: $sensitivity, in: 0.6...4)
-                Text(String(format: "%.0f fps", fps)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(String(format: "%.0f fps", stream.fps)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            Button(role: .destructive) { connected = false; Haptics.tap() } label: {
+            Button(role: .destructive) { stream.stop(); audio.stop(); Haptics.tap() } label: {
                 Label("Disconnect", systemImage: "xmark.circle").frame(maxWidth: .infinity).padding(.vertical, 4)
             }
             .buttonStyle(.glass)
@@ -273,20 +316,19 @@ struct RemoteDesktopView: View {
 
     private var screen: some View {
         ZStack {
-            if let image {
+            if stream.connected {
                 GeometryReader { g in
-                    let fit = fitted(image.size, in: g.size)
-                    Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                    let fit = fitted(stream.size, in: g.size)
+                    StreamLayerView(display: stream.display)
                         .frame(width: g.size.width, height: g.size.height)
-                        .contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0)
-                            .onChanged { v in drag(v, fit: fit, imageWidth: image.size.width) }
-                            .onEnded { v in end(v, fit: fit) })
+                        .overlay(Color.clear.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0)
+                            .onChanged { v in drag(v, fit: fit) }
+                            .onEnded { v in end(v, fit: fit) }))
                 }
             } else {
                 VStack(spacing: 10) {
-                    if connected { ProgressView() } else { Image(systemName: "display").font(.largeTitle).foregroundStyle(.secondary) }
-                    Text(connected ? (error ?? "Connecting to your screen…") : "Not connected").font(.footnote).foregroundStyle(.secondary)
+                    Image(systemName: "display").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("Not connected").font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }
@@ -296,8 +338,8 @@ struct RemoteDesktopView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 22))
     }
 
-    private func drag(_ v: DragGesture.Value, fit: CGRect, imageWidth: CGFloat) {
-        guard connected, Date().timeIntervalSince(lastSent) > 0.02 else { return }
+    private func drag(_ v: DragGesture.Value, fit: CGRect) {
+        guard stream.connected, Date().timeIntervalSince(lastSent) > 0.016 else { return }
         lastSent = Date()
         switch mode {
         case 0:
@@ -306,7 +348,7 @@ struct RemoteDesktopView: View {
             conn.send(["type": "moveabs", "x": x, "y": y])
         case 1:
             if let l = last {
-                let k = Double(imageWidth / max(fit.width, 1)) * sensitivity / 1.6
+                let k = Double(stream.size.width / max(fit.width, 1)) * sensitivity / 1.6
                 conn.send(["type": "move", "dx": Double(v.location.x - l.x) * k, "dy": Double(v.location.y - l.y) * k])
             }
             last = v.location
@@ -318,7 +360,7 @@ struct RemoteDesktopView: View {
 
     private func end(_ v: DragGesture.Value, fit: CGRect) {
         last = nil
-        guard connected, hypot(v.translation.width, v.translation.height) < 8, mode != 2 else { return }
+        guard stream.connected, hypot(v.translation.width, v.translation.height) < 8, mode != 2 else { return }
         if mode == 0 {
             let x = (v.location.x - fit.minX) / fit.width, y = (v.location.y - fit.minY) / fit.height
             guard (0...1).contains(x), (0...1).contains(y) else { return }
@@ -337,27 +379,6 @@ struct RemoteDesktopView: View {
             conn.send(["type": "text", "text": new.trimmingCharacters(in: .whitespaces)])
         }
         if new.isEmpty || new.count > 60 { text = " " }
-    }
-
-    /// Frame loop. Two of these run at once; a frame is shown only if it is newer than the one on screen.
-    @MainActor private func pump(delay: Int) async {
-        let p = Self.presets[quality]
-        try? await Task.sleep(for: .milliseconds(delay))
-        while !Task.isCancelled && connected {
-            seq += 1
-            let mine = seq
-            do {
-                let d = try await conn.request("/api/screen", query: ["w": "\(p.w)", "q": "\(p.q)"])
-                if mine > shown, let img = UIImage(data: d), let ready = await img.byPreparingForDisplay() {
-                    shown = mine; image = ready; error = nil; frames += 1
-                    let dt = Date().timeIntervalSince(since)
-                    if dt > 1 { fps = Double(frames) / dt; frames = 0; since = Date() }
-                }
-            } catch {
-                self.error = error.localizedDescription
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
     }
 
     private func fitted(_ img: CGSize, in box: CGSize) -> CGRect {

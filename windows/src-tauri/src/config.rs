@@ -36,6 +36,9 @@ pub struct Config {
     pub remote_control: bool,
     pub auto_photo_sync: bool,
     pub autostart: bool,
+    /// Lock the PC when a paired iPhone has been disconnected for `away_minutes`.
+    pub lock_when_away: bool,
+    pub away_minutes: u32,
     /// token -> device name
     pub tokens: HashMap<String, String>,
 }
@@ -63,6 +66,8 @@ impl Default for Config {
             remote_control: true,
             auto_photo_sync: true,
             autostart: true,
+            lock_when_away: false,
+            away_minutes: 3,
             tokens: HashMap::new(),
         }
     }

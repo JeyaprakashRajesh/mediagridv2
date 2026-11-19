@@ -340,6 +340,7 @@ final class Coordinator: ObservableObject {
 
     func startRinging() {
         findMe = true
+        Siren.shared.start()
         ring?.cancel()
         ring = Task {
             for _ in 0..<30 where !Task.isCancelled && findMe {
@@ -348,10 +349,11 @@ final class Coordinator: ObservableObject {
                 try? await Task.sleep(for: .seconds(1.2))
             }
             findMe = false
+            Siren.shared.stop()
         }
     }
 
-    func stopRinging() { findMe = false; ring?.cancel() }
+    func stopRinging() { findMe = false; ring?.cancel(); Siren.shared.stop() }
 }
 
 // MARK: - Shared items

@@ -210,6 +210,114 @@ fn primary_rect() -> Option<(i32, i32, u32, u32)> {
     Some((m.x().ok()?, m.y().ok()?, m.width().ok()?, m.height().ok()?))
 }
 
+/// Parsec-style screen stream: captures the primary monitor, encodes H.264 (low-latency, screen-content tuned) and
+/// sends one Annex-B access unit per message. Static screens send nothing; a full frame is forced when `key` is set.
+/// Runs on its own thread until `stop` is set or the receiver is gone.
+pub fn stream_h264(
+    max_w: u32,
+    fps: u32,
+    kbps: u32,
+    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    key: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use openh264::encoder::{Encoder, EncoderConfig};
+    use openh264::formats::YUVBuffer;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let Ok(mons) = xcap::Monitor::all() else { return };
+    let Some(m) = mons.iter().find(|m| m.is_primary().unwrap_or(false)).or_else(|| mons.first()) else { return };
+    let step = Duration::from_micros(1_000_000 / fps.clamp(5, 60) as u64);
+    let mut enc: Option<Encoder> = None;
+    let mut dims = (0u32, 0u32);
+    let mut last_sig = 0u64;
+    let mut last_sent = Instant::now();
+
+    while !stop.load(Ordering::Relaxed) {
+        let t0 = Instant::now();
+        let Ok(cap) = m.capture_image() else { std::thread::sleep(step); continue };
+        let (w, h) = (cap.width(), cap.height());
+        let tw = w.min(max_w) & !1;
+        let th = ((h as u64 * tw as u64 / w as u64) as u32) & !1;
+        let Some(rgba) = image::RgbaImage::from_raw(w, h, cap.into_raw()) else { continue };
+        let small = if tw != w { image::imageops::resize(&rgba, tw, th, image::imageops::FilterType::Triangle) } else { rgba };
+        let rgb = image::DynamicImage::ImageRgba8(small).to_rgb8();
+
+        // cheap change detection on a sample of the picture: an unchanged desktop costs no CPU or bandwidth
+        let raw = rgb.as_raw();
+        let sig = raw.iter().step_by(257).fold(1469598103934665603u64, |a, b| (a ^ *b as u64).wrapping_mul(1099511628211));
+        let force = key.swap(false, Ordering::Relaxed);
+        if sig == last_sig && !force && last_sent.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(step.saturating_sub(t0.elapsed()));
+            continue;
+        }
+        last_sig = sig;
+
+        if enc.is_none() || dims != (tw, th) {
+            let cfg = EncoderConfig::new(tw, th)
+                .set_bitrate_bps(kbps.clamp(500, 40_000) * 1000)
+                .max_frame_rate(fps as f32);
+            match Encoder::with_config(cfg) {
+                Ok(e) => { enc = Some(e); dims = (tw, th); }
+                Err(_) => return,
+            }
+        }
+        let Some(e) = enc.as_mut() else { return };
+        if force { e.force_intra_frame(); }
+        let yuv = YUVBuffer::with_rgb(tw as usize, th as usize, raw);
+        let Ok(bits) = e.encode(&yuv) else { continue };
+        let data = bits.to_vec();
+        if !data.is_empty() {
+            match tx.try_send(data) {
+                Ok(()) => last_sent = Instant::now(),
+                // the phone is behind: drop this frame and make the next one a full frame so the picture recovers at once
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => key.store(true, Ordering::Relaxed),
+                Err(_) => return,
+            }
+        }
+        std::thread::sleep(step.saturating_sub(t0.elapsed()));
+    }
+}
+
+/// PC sound for the phone: captures what the PC is playing (WASAPI loopback) as 16-bit stereo PCM.
+/// Messages: first byte 0 = JSON header {"rate":N}, first byte 1 = interleaved s16le stereo samples.
+pub fn stream_audio(tx: tokio::sync::mpsc::Sender<Vec<u8>>, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use std::sync::atomic::Ordering;
+    let host = cpal::default_host();
+    let Some(dev) = host.default_output_device() else { return };
+    let Ok(cfg) = dev.default_output_config() else { return };
+    if cfg.sample_format() != cpal::SampleFormat::F32 { return; }
+    let (rate, ch) = (cfg.sample_rate().0, (cfg.channels() as usize).max(1));
+    let mut head = vec![0u8];
+    head.extend_from_slice(format!("{{\"rate\":{rate}}}").as_bytes());
+    if tx.blocking_send(head).is_err() { return; }
+    let tx2 = tx.clone();
+    let built = dev.build_input_stream(
+        &cfg.config(),
+        move |data: &[f32], _| {
+            let mut out = Vec::with_capacity(1 + data.len() / ch * 4);
+            out.push(1);
+            for f in data.chunks(ch) {
+                let l = f[0];
+                let r = if ch > 1 { f[1] } else { f[0] };
+                for s in [l, r] {
+                    out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+                }
+            }
+            let _ = tx2.try_send(out); // phone behind: drop, stay live
+        },
+        |_| {},
+        None,
+    );
+    let Ok(stream) = built else { return };
+    if stream.play().is_err() { return; }
+    while !stop.load(Ordering::Relaxed) && !tx.is_closed() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 /// JPEG screenshot of the primary monitor scaled to `max_w`.
 pub fn screenshot(max_w: u32, quality: u8) -> Option<Vec<u8>> {
     let mons = xcap::Monitor::all().ok()?;

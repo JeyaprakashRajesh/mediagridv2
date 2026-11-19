@@ -148,13 +148,23 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/ping` | `{app, name, version, account}` — discovery/health |
+| `GET /api/ping` (also returns the PC's `mac` for Wake-on-LAN) | `{app, name, version, account}` — discovery/health |
 | `POST /api/login` `{email,password,device}` | → `{token, name}` |
 | `GET /api/me` | PC name, counts, toggles |
 | `GET /api/music/tracks` | all tracks (`id,title,artist,album,duration,size,ext,added,track,year,has_art`, plus `bpm,energy,punch` once the PC's audio analysis has reached the song; `?pop=1` also adds `rank` (Deezer popularity, looked up in the background and stored in `popularity.json`); duplicates of one song are collapsed to the best quality) |
 | `GET /api/music/stream/{id}` | audio, supports `Range` |
 | `GET /api/music/art/{id}` | embedded cover |
 | `POST /api/rescan` | rescan library |
+| `POST /api/cam/frame`, `POST /api/cam/audio` | iPhone webcam: JPEG frame / 16 kHz mono 16-bit PCM chunk |
+| `GET /cam.mjpg`, `GET /api/cam/audio` | live MJPEG stream / raw PCM stream of what the iPhone sends |
+| `GET/POST /api/cam/state` | `{camera, mic}` — what the iPhone is currently streaming |
+| `GET/POST /api/vcam`, `POST /api/vcam/install` | virtual webcam (softcam DirectShow filter): status, on/off + flip, one-time registration (UAC, PC app only) |
+| `WS /api/audio/stream` | PC sound → iPhone: binary, first byte 0 = JSON `{rate}`, 1 = s16le stereo PCM |
+| `GET/POST /api/presence` | lock the PC when a paired iPhone is gone `minutes` (POST: PC app only) |
+| `GET /api/music/lyrics/{id}` | `{synced, plain}` from LRCLIB, cached on the PC |
+| `POST /api/pc/play` | `{ids, mode: play\|queue}` — play/queue songs in the PC app's own player |
+| `WS /api/screen/stream?w&fps&kbps` | PC → iPhone H.264 desktop stream (binary = Annex-B access unit; send text `key` for a full frame) |
+| `WS /api/cam/stream` | iPhone → PC: binary messages, first byte 1 = JPEG frame, 2 = PCM audio |
 | `POST /api/music/upload?name=…[&rescan=0]` | body = audio file; saved to `<music folder>/From iPhone`, then rescanned |
 | `GET /api/media/items?kind=photo\|video` | PC media list |
 | `GET /api/media/file/{id}` / `thumb/{id}?s=360` | original (Range) / JPEG thumbnail |

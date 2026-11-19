@@ -4,7 +4,7 @@ use crate::control::{self, Cmd};
 use crate::library;
 use crate::state::{now_ms, Device, Shared, SharedItem};
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit, Path as AxPath, Query, Request, State,
@@ -21,7 +21,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use once_cell::sync::Lazy;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 use tower_http::{cors::CorsLayer, services::ServeFile};
 
@@ -36,6 +38,7 @@ fn err(code: StatusCode, msg: &str) -> Response {
 
 pub async fn run(app: Shared) {
     let port = app.cfg.read().port;
+    tokio::spawn(presence_loop(app.clone()));
     advertise(&app, port);
 
     let open = Router::new()
@@ -65,12 +68,24 @@ pub async fn run(app: Shared) {
         .route("/api/photos/upload", post(photos_upload))
         .route("/api/control", post(control_http))
         .route("/api/screen", get(screen))
+        .route("/api/screen/stream", get(screen_stream))
+        .route("/api/audio/stream", get(audio_stream))
+        .route("/api/presence", get(presence_get).post(presence_set))
+        .route("/api/music/lyrics/{id}", get(lyrics))
+        .route("/api/pc/play", post(pc_play))
         .route("/api/devices", get(devices))
         .route("/api/playback", get(playback_get).post(playback_set))
         .route("/api/call", get(call_get).post(call_set))
         .route("/api/clipboard/silent", post(clip_silent))
         .route("/api/playlists", get(playlists_get).post(playlists_set))
         .route("/api/phone", post(phone_cmd))
+        .route("/api/cam/frame", post(cam_frame))
+        .route("/api/cam/audio", get(cam_audio_out).post(cam_audio_in))
+        .route("/api/cam/state", get(cam_state_get).post(cam_state_set))
+        .route("/cam.mjpg", get(cam_mjpeg))
+        .route("/api/cam/stream", get(cam_stream))
+        .route("/api/vcam", get(vcam_status).post(vcam_set))
+        .route("/api/vcam/install", post(vcam_install))
         .route("/ws", get(ws))
         .layer(middleware::from_fn_with_state(app.clone(), auth));
 
@@ -129,9 +144,12 @@ async fn auth(State(app): State<Shared>, mut req: Request, next: Next) -> Respon
     next.run(req).await
 }
 
+/// This PC's network card address, so the phone can send a Wake-on-LAN packet when the PC is asleep.
+static MAC: Lazy<Option<String>> = Lazy::new(|| mac_address::get_mac_address().ok().flatten().map(|m| m.to_string()));
+
 async fn ping(State(app): State<Shared>) -> Json<Value> {
     let c = app.cfg.read();
-    Json(json!({ "app": "MediaGrid", "name": c.device_name, "version": env!("CARGO_PKG_VERSION"), "account": c.has_account() }))
+    Json(json!({ "app": "MediaGrid", "name": c.device_name, "version": env!("CARGO_PKG_VERSION"), "account": c.has_account(), "mac": *MAC }))
 }
 
 #[derive(Deserialize)]
@@ -475,6 +493,111 @@ async fn music_upload(State(app): State<Shared>, Query(q): Q, body: Body) -> Res
     }
 }
 
+// ---------- iPhone as webcam / microphone ----------
+// The phone POSTs JPEG frames and 16 kHz mono PCM chunks; the PC re-serves them as an MJPEG stream (/cam.mjpg:
+// preview, or an OBS browser/media source -> OBS Virtual Camera for video calls) and a raw PCM stream the desktop UI plays.
+
+static CAM: Lazy<broadcast::Sender<Bytes>> = Lazy::new(|| broadcast::channel(4).0);
+static MIC: Lazy<broadcast::Sender<Bytes>> = Lazy::new(|| broadcast::channel(32).0);
+static CAM_STATE: Lazy<parking_lot::RwLock<Value>> = Lazy::new(|| parking_lot::RwLock::new(json!({ "camera": false, "mic": false })));
+
+/// The phone's one persistent socket: binary messages, first byte 1 = JPEG frame, 2 = PCM audio.
+async fn cam_stream(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(|mut socket| async move {
+        while let Some(Ok(msg)) = socket.recv().await {
+            if let Message::Binary(b) = msg {
+                if b.len() < 2 { continue; }
+                match b[0] {
+                    1 => { let _ = CAM.send(b.slice(1..)); }
+                    2 => { let _ = MIC.send(b.slice(1..)); }
+                    _ => {}
+                }
+            }
+        }
+    })
+}
+
+async fn cam_frame(body: Bytes) -> Json<Value> {
+    let _ = CAM.send(body); // no viewers = nobody to send to; not an error
+    Json(json!({ "ok": true }))
+}
+
+async fn cam_audio_in(body: Bytes) -> Json<Value> {
+    let _ = MIC.send(body);
+    Json(json!({ "ok": true }))
+}
+
+/// Frames for the virtual webcam worker (vcam.rs).
+pub fn cam_subscribe() -> broadcast::Receiver<Bytes> {
+    CAM.subscribe()
+}
+
+async fn vcam_status() -> Json<Value> {
+    Json(crate::vcam::status())
+}
+
+/// Turn the virtual webcam on/off and/or flip the picture.
+async fn vcam_set(Json(b): Json<Value>) -> Json<Value> {
+    if let Some(f) = b["flip"].as_bool() { crate::vcam::set_flip(f); }
+    if let Some(on) = b["on"].as_bool() { crate::vcam::set_on(on); }
+    Json(crate::vcam::status())
+}
+
+/// One-time registration of the virtual camera (Windows shows a UAC prompt). Only the PC app itself may ask for it.
+async fn vcam_install(State(app): State<Shared>, axum::Extension(w): axum::Extension<Who>) -> Response {
+    if w.0 != app.ui_token { return err(StatusCode::FORBIDDEN, "Only the PC app can install the virtual camera."); }
+    match tokio::task::spawn_blocking(crate::vcam::install).await {
+        Ok(Ok(())) => Json(crate::vcam::status()).into_response(),
+        Ok(Err(e)) => err(StatusCode::CONFLICT, &e),
+        Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "install failed"),
+    }
+}
+
+async fn cam_state_set(State(app): State<Shared>, Json(b): Json<Value>) -> Json<Value> {
+    let v = json!({ "camera": b["camera"].as_bool().unwrap_or(false), "mic": b["mic"].as_bool().unwrap_or(false) });
+    // once registered, the iPhone camera simply becomes the PC's webcam
+    if crate::vcam::installed() { crate::vcam::set_on(v["camera"].as_bool().unwrap_or(false)); }
+    *CAM_STATE.write() = v.clone();
+    app.ui("cam", v);
+    Json(json!({ "ok": true }))
+}
+
+async fn cam_state_get() -> Json<Value> {
+    Json(CAM_STATE.read().clone())
+}
+
+/// Long-lived response that forwards every broadcast chunk (optionally wrapped as an MJPEG part).
+fn live(rx: broadcast::Receiver<Bytes>, content_type: &'static str, mjpeg: bool) -> Response {
+    let s = futures_util::stream::unfold(rx, move |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(chunk) => {
+                    let out = if mjpeg {
+                        let mut b = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", chunk.len()).into_bytes();
+                        b.extend_from_slice(&chunk);
+                        b.extend_from_slice(b"\r\n");
+                        Bytes::from(b)
+                    } else {
+                        chunk
+                    };
+                    return Some((Ok::<Bytes, std::convert::Infallible>(out), rx));
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue, // slow viewer: skip ahead
+                Err(_) => return None,
+            }
+        }
+    });
+    ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-store")], Body::from_stream(s)).into_response()
+}
+
+async fn cam_mjpeg() -> Response {
+    live(CAM.subscribe(), "multipart/x-mixed-replace; boundary=frame", true)
+}
+
+async fn cam_audio_out() -> Response {
+    live(MIC.subscribe(), "application/octet-stream", false)
+}
+
 // ---------- clipboard & shared ----------
 
 async fn clip_get(State(app): State<Shared>) -> Json<Value> {
@@ -652,6 +775,116 @@ async fn screen(State(app): State<Shared>, Query(q): Q) -> Response {
     }
 }
 
+/// H.264 desktop stream over a WebSocket (binary = one Annex-B access unit; the phone sends the text "key" to ask for a full frame).
+async fn screen_stream(ws: WebSocketUpgrade, State(app): State<Shared>, Query(q): Q) -> Response {
+    if !app.cfg.read().remote_control {
+        return err(StatusCode::FORBIDDEN, "Remote control is turned off on the PC.");
+    }
+    let num = |k: &str, d: u32, lo: u32, hi: u32| q.get(k).and_then(|s| s.parse().ok()).unwrap_or(d).clamp(lo, hi);
+    let (w, fps, kbps) = (num("w", 1280, 320, 3840), num("fps", 30, 5, 60), num("kbps", 5000, 500, 40_000));
+    ws.on_upgrade(move |mut socket| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(3);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let key = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        {
+            let (stop, key) = (stop.clone(), key.clone());
+            std::thread::spawn(move || control::stream_h264(w, fps, kbps, tx, stop, key));
+        }
+        loop {
+            tokio::select! {
+                Some(frame) = rx.recv() => {
+                    if socket.send(Message::Binary(frame.into())).await.is_err() { break; }
+                }
+                m = socket.recv() => match m {
+                    Some(Ok(Message::Text(t))) if t.as_str() == "key" => key.store(true, std::sync::atomic::Ordering::Relaxed),
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    _ => {}
+                },
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+}
+
+/// PC sound over a WebSocket: see control::stream_audio for the message format.
+async fn audio_stream(ws: WebSocketUpgrade, State(app): State<Shared>) -> Response {
+    if !app.cfg.read().remote_control {
+        return err(StatusCode::FORBIDDEN, "Remote control is turned off on the PC.");
+    }
+    ws.on_upgrade(|mut socket| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let stop = stop.clone();
+            std::thread::spawn(move || control::stream_audio(tx, stop));
+        }
+        loop {
+            tokio::select! {
+                Some(chunk) = rx.recv() => {
+                    if socket.send(Message::Binary(chunk.into())).await.is_err() { break; }
+                }
+                m = socket.recv() => match m {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    _ => {}
+                },
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+}
+
+/// Lock the PC when a paired iPhone has been gone for the chosen time (opt-in, one lock per absence).
+static AWAY_LOCKED: Lazy<parking_lot::Mutex<std::collections::HashSet<String>>> = Lazy::new(Default::default);
+
+async fn presence_loop(app: Shared) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let (on, mins) = {
+            let c = app.cfg.read();
+            (c.lock_when_away, c.away_minutes)
+        };
+        if !on { continue; }
+        let now = now_ms();
+        let mut locked = AWAY_LOCKED.lock();
+        for (t, d) in app.devices.read().iter() {
+            if d.connected {
+                locked.remove(t);
+            } else if d.last_seen > 0 && now - d.last_seen > mins as i64 * 60_000 && locked.insert(t.clone()) {
+                control::send(Cmd::Power { action: "lock".into() });
+            }
+        }
+    }
+}
+
+async fn presence_get(State(app): State<Shared>) -> Json<Value> {
+    let c = app.cfg.read();
+    Json(json!({ "lock": c.lock_when_away, "minutes": c.away_minutes }))
+}
+
+async fn presence_set(State(app): State<Shared>, axum::Extension(w): axum::Extension<Who>, Json(b): Json<Value>) -> Response {
+    if w.0 != app.ui_token { return err(StatusCode::FORBIDDEN, "Only the PC app can change this."); }
+    {
+        let mut c = app.cfg.write();
+        if let Some(v) = b["lock"].as_bool() { c.lock_when_away = v; }
+        if let Some(m) = b["minutes"].as_u64() { c.away_minutes = (m as u32).clamp(1, 120); }
+        c.save();
+    }
+    presence_get(State(app)).await.into_response()
+}
+
+async fn lyrics(State(app): State<Shared>, AxPath(id): AxPath<String>) -> Json<Value> {
+    let t = app.lib.read().track(&id).map(|t| (t.artist.clone(), t.title.clone(), t.album.clone(), t.duration));
+    let Some((artist, title, album, dur)) = t else { return Json(json!({})) };
+    let v = tokio::task::spawn_blocking(move || crate::lyrics::get(&id, &artist, &title, &album, dur)).await.unwrap_or_else(|_| json!({}));
+    Json(v)
+}
+
+/// The phone asks the PC's own player to play / queue songs.
+async fn pc_play(State(app): State<Shared>, Json(b): Json<Value>) -> Json<Value> {
+    app.ui("pcplay", b);
+    Json(json!({ "ok": true }))
+}
+
 async fn playlists_get(State(app): State<Shared>) -> Json<Value> {
     let v = app.playlists.read().clone();
     Json(v)
@@ -770,6 +1003,7 @@ async fn ws_loop(app: Shared, token: String, ip: String, socket: WebSocket) {
     if !is_ui {
         if let Some(e) = app.devices.write().get_mut(&token) {
             e.connected = false;
+            e.last_seen = now_ms(); // when it went away (nearby lock)
         }
         app.ui("devices", json!({}));
     }

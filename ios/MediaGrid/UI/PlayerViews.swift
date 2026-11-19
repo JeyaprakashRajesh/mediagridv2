@@ -66,6 +66,7 @@ struct NowPlayingView: View {
     @State private var scrubValue: Double = 0
     @State private var showQueue = false
     @State private var downloading = false
+    @State private var showLyrics = false
     @ObservedObject private var ui = UIState.shared
     @ObservedObject private var tint = TintStore.shared
 
@@ -83,6 +84,8 @@ struct NowPlayingView: View {
 
             if showQueue {
                 queue.transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if showLyrics {
+                LyricsView(track: t).frame(maxHeight: .infinity).transition(.opacity)
             } else {
                 GeometryReader { g in
                     let side = min(g.size.width, g.size.height)
@@ -184,6 +187,20 @@ struct NowPlayingView: View {
                     .disabled(music.isDownloaded(t) || downloading)
                     .accessibilityLabel(music.isDownloaded(t) ? "Downloaded" : "Download")
                 }
+                Button { withAnimation(.smooth(duration: 0.2)) { showLyrics.toggle() }; Haptics.tap() } label: {
+                    Image(systemName: showLyrics ? "quote.bubble.fill" : "quote.bubble").font(.title3)
+                }
+                .frame(width: 34, height: 34)
+                .accessibilityLabel("Lyrics")
+                Menu {
+                    Button("Off") { player.setSleep(minutes: nil); player.cancelSleepAtSongEnd() }
+                    ForEach([15, 30, 45, 60], id: \.self) { m in Button("\(m) minutes") { player.setSleep(minutes: m) } }
+                    Button("End of song") { player.sleepAfterSong() }
+                } label: {
+                    Image(systemName: player.sleepAt != nil || player.sleepAtSongEnd ? "moon.zzz.fill" : "moon.zzz").font(.title3)
+                }
+                .frame(width: 34, height: 34)
+                .accessibilityLabel("Sleep timer")
                 ShareLink(item: t.map { "\($0.title) — \($0.artist)" } ?? "") { Image(systemName: "square.and.arrow.up") }
                     .frame(width: 34, height: 34)
             }
