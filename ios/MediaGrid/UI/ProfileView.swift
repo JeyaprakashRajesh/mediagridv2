@@ -13,6 +13,7 @@ struct ProfileView: View {
     @AppStorage("mg.autoplayGenre") private var autoplayGenre = true
     @AppStorage("mg.rankMethod") private var rankMethod = 0
     @AppStorage("mg.bridgePC") private var bridgePC = false
+    @AppStorage("mg.autoDownload") private var autoDownload = false
     @ObservedObject private var streamer = PhoneStreamer.shared
     @ObservedObject private var bridge = AudioBridge.shared
     @State private var editingHost = false
@@ -216,6 +217,7 @@ struct ProfileView: View {
             toggleRow("doc.on.clipboard", Theme.cyan, "Universal clipboard", $clip.auto)
             toggleRow("platter.filled.top.iphone", Theme.pink, "Dynamic Island & Lock Screen", $liveActivity)
             toggleRow("shuffle", Theme.mint, "Shuffle by default", $player.shuffle)
+            toggleRow("arrow.down.circle", Theme.cyan, "Auto-download favourites (Wi-Fi + charging)", $autoDownload)
             toggleRow("dot.radiowaves.left.and.right", Theme.accent, "Autoplay similar songs", $autoplayGenre)
             row("chart.bar.fill", Theme.cyan, "Song ranking") {
                 Picker("Song ranking", selection: $rankMethod) {

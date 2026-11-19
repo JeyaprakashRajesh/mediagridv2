@@ -78,6 +78,9 @@ pub fn fetch_missing(items: Vec<(String, String, String)>) {
         let now = now_ms();
         let mut n = 0;
         for (id, artist, title) in items {
+            while crate::eco::ON.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(5)); // eco mode: no background work
+            }
             let known = DB.read().get(&id).map(|e| e.0 > 0 || now - e.1 < RETRY_MS).unwrap_or(false);
             if known {
                 continue;

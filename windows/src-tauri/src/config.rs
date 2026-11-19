@@ -39,6 +39,12 @@ pub struct Config {
     /// Lock the PC when a paired iPhone has been disconnected for `away_minutes`.
     pub lock_when_away: bool,
     pub away_minutes: u32,
+    /// Extra program names (no .exe) eco mode must not freeze.
+    pub eco_keep: Vec<String>,
+    /// Eco mode on from `eco_from` to `eco_to` (HH:MM).
+    pub eco_schedule: bool,
+    pub eco_from: String,
+    pub eco_to: String,
     /// Accept the iPhone camera / microphone stream (virtual webcam, mic playback).
     pub accept_phone_stream: bool,
     /// Let the iPhone listen to this PC's sound.
@@ -72,6 +78,10 @@ impl Default for Config {
             autostart: true,
             lock_when_away: false,
             away_minutes: 3,
+            eco_keep: vec![],
+            eco_schedule: false,
+            eco_from: "23:00".into(),
+            eco_to: "07:00".into(),
             accept_phone_stream: true,
             share_pc_audio: true,
             tokens: HashMap::new(),

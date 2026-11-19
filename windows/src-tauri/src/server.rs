@@ -39,6 +39,7 @@ fn err(code: StatusCode, msg: &str) -> Response {
 pub async fn run(app: Shared) {
     let port = app.cfg.read().port;
     tokio::spawn(presence_loop(app.clone()));
+    tokio::spawn(crate::tools::schedule_loop(app.clone()));
     advertise(&app, port);
 
     let open = Router::new()
@@ -71,6 +72,14 @@ pub async fn run(app: Shared) {
         .route("/api/screen/stream", get(screen_stream))
         .route("/api/audio/stream", get(audio_stream))
         .route("/api/stream/options", get(stream_options))
+        .route("/api/eco", get(eco_get).post(eco_set))
+        .route("/api/macros", get(crate::tools::macros_get).post(crate::tools::macros_set))
+        .route("/api/macros/run", post(crate::tools::macros_run))
+        .route("/api/health", get(crate::tools::health))
+        .route("/api/apps", get(crate::tools::apps_list).post(crate::tools::apps_act))
+        .route("/api/files/op", post(crate::tools::files_op))
+        .route("/api/pc/open", post(crate::tools::open_link))
+        .route("/api/pc/find", post(crate::tools::find_pc))
         .route("/api/presence", get(presence_get).post(presence_set))
         .route("/api/music/lyrics/{id}", get(lyrics))
         .route("/api/pc/play", post(pc_play))
@@ -809,6 +818,17 @@ async fn screen_stream(ws: WebSocketUpgrade, State(app): State<Shared>, Query(q)
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
     })
+}
+
+async fn eco_get() -> Json<Value> {
+    Json(json!({ "on": crate::eco::ON.load(std::sync::atomic::Ordering::SeqCst) }))
+}
+
+/// Eco mode on/off from the phone or the PC app (needs "Allow iPhone to control this PC").
+async fn eco_set(State(app): State<Shared>, Json(b): Json<Value>) -> Response {
+    if !app.cfg.read().remote_control { return err(StatusCode::FORBIDDEN, "Remote control is turned off on the PC."); }
+    crate::eco::set(&app, b["on"].as_bool().unwrap_or(false));
+    eco_get().await.into_response()
 }
 
 /// What the PC app currently allows, so the phone can explain a refusal instead of failing silently.

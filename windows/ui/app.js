@@ -416,6 +416,8 @@ function renderSettings() {
   for (const [id, list] of [["music-dirs", info.musicDirs], ["media-dirs", info.mediaDirs]]) { const el = $("#" + id); el.innerHTML = ""; (list || []).forEach((v) => el.append(folderRow(v))); }
   for (const [id, v] of [["photo-dir", info.photoSyncDir], ["inbox-dir", info.inboxDir]]) { const el = $("#" + id); el.innerHTML = ""; const r = folderRow(v); r.querySelector("[data-del]").remove(); el.append(r); }
   $("#s-autostart").checked = info.autostart; $("#s-clip").checked = info.clipboardSync; $("#s-remote").checked = info.remoteControl; $("#s-photos").checked = info.autoPhotoSync;
+  $("#s-ecokeep").value = info.ecoKeep || ""; ecoOn = info.ecoOn; renderEco();
+  $("#eco-sched").checked = info.ecoSchedule; $("#eco-from").value = info.ecoFrom; $("#eco-to").value = info.ecoTo;
   $("#s-accept").checked = info.acceptPhoneStream; $("#s-pcaudio").checked = info.sharePcAudio;
   $("#clip-toggle").checked = info.clipboardSync;
 }
@@ -425,6 +427,7 @@ $("#settings-save").onclick = async () => {
   await invoke("save_settings", { s: {
     musicDirs: vals("music-dirs"), mediaDirs: vals("media-dirs"), photoSyncDir: vals("photo-dir")[0], inboxDir: vals("inbox-dir")[0],
     autostart: $("#s-autostart").checked, clipboardSync: $("#s-clip").checked, remoteControl: $("#s-remote").checked, autoPhotoSync: $("#s-photos").checked,
+    ecoKeep: $("#s-ecokeep").value,
     acceptPhoneStream: $("#s-accept").checked, sharePcAudio: $("#s-pcaudio").checked,
   } });
   toast("Settings saved"); refreshInfo();
@@ -455,6 +458,17 @@ function syncLyrics() {
   $(`#lyrics-body p[data-i="${i}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 $("#p-lyrics").onclick = () => { lyr.on = !lyr.on; $("#lyrics-panel").hidden = !lyr.on; $("#p-lyrics").classList.toggle("on", lyr.on); loadLyrics(); };
+
+/* ---------------- eco mode ---------------- */
+let ecoOn = false;
+function renderEco() { $("#eco-btn").textContent = ecoOn ? "Turn eco mode off" : "Turn eco mode on"; $("#eco-btn").classList.toggle("primary", !ecoOn); }
+$("#eco-btn").onclick = () => {
+  if (!ecoOn && !confirm("Freeze all your other apps and turn the screen off?\n\nNothing is closed or lost. Turn it off again from here, the iPhone, the tray menu or Ctrl+Alt+E.")) return;
+  invoke("toggle_eco");
+};
+
+const saveEcoSchedule = () => invoke("save_settings", { s: { ecoSchedule: $("#eco-sched").checked, ecoFrom: $("#eco-from").value, ecoTo: $("#eco-to").value } }).then(() => toast("Eco schedule saved"));
+["#eco-sched", "#eco-from", "#eco-to"].forEach((id) => ($(id).onchange = saveEcoSchedule));
 
 /* ---------------- lock when away ---------------- */
 async function loadPresence() {
@@ -573,6 +587,7 @@ T.event.listen("mg", ({ payload }) => {
   }
   else if (event === "playlists") { playlists = data; loadTracks(); }
   else if (event === "cam") { cam.state = data; renderCam(); }
+  else if (event === "eco") { ecoOn = data.on; renderEco(); toast(data.on ? "Eco mode on" : "Eco mode off"); }
   else if (event === "pcplay") {
     const list = (data.ids || []).map((id) => tracks.find((t) => t.id === id)).filter(Boolean);
     if (list.length) { data.mode === "queue" ? player.enqueue(list) : player.playList(list, 0); toast(data.mode === "queue" ? "Added to the PC queue" : `Playing ${list[0].title}`); }

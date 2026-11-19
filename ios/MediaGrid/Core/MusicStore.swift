@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import SwiftUI
 
 /// Auto-generated, Spotify-style playlist.
@@ -295,6 +296,30 @@ final class MusicStore: ObservableObject {
         var d: [String: [Track]] = [:]
         for t in tracks { for n in ArtistNames.split(t.artist) { d[n, default: []].append(t) } }
         return d.map { TrackGroup(name: $0.key, artist: $0.key, tracks: $0.value) }.sorted { $0.tracks.count > $1.tracks.count }
+    }
+
+    // MARK: auto-download
+
+    /// Keeps favourites on the phone: Liked songs + the 100 highest-scored, only on Wi-Fi while charging.
+    func autoDownload() {
+        guard UserDefaults.standard.bool(forKey: "mg.autoDownload"), !syncing, Connection.shared.state == .online else { return }
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        guard UIDevice.current.batteryState == .charging || UIDevice.current.batteryState == .full else { return }
+        let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+        monitor.pathUpdateHandler = { [weak self] path in
+            monitor.cancel()
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in self?.downloadFavourites() }
+        }
+        monitor.start(queue: .global())
+    }
+
+    private func downloadFavourites() {
+        let scores = popularityScores()
+        let top = tracks.sorted { (scores[$0.id] ?? 0) > (scores[$1.id] ?? 0) }.prefix(100).map(\.id)
+        let want = liked.union(top)
+        let pending = tracks.filter { want.contains($0.id) && !downloaded.contains($0.id) }
+        if !pending.isEmpty { syncAll(pending) }
     }
 
     // MARK: popularity

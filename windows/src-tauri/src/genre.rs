@@ -51,6 +51,9 @@ pub fn analyze_missing(tracks: Vec<(String, String)>) {
             if CACHE.read().contains_key(&id) {
                 continue;
             }
+            while crate::eco::ON.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(5)); // eco mode: no background CPU work
+            }
             let f = analyze(&path).unwrap_or_default();
             CACHE.write().insert(id, f);
             n += 1;

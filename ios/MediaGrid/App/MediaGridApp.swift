@@ -46,6 +46,7 @@ struct MediaGridApp: App {
                 Task {
                     try? await Task.sleep(for: .milliseconds(600))
                     clip.checkPhoneClipboard()
+                    music.autoDownload()
                     if photos.auto { await photos.syncNow() }
                 }
             case .background:

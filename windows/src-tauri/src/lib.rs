@@ -1,12 +1,14 @@
 mod clip;
 mod config;
 mod control;
+mod eco;
 mod genre;
 mod lyrics;
 mod library;
 mod popularity;
 mod server;
 mod state;
+mod tools;
 mod vcam;
 
 use serde_json::{json, Value};
@@ -31,6 +33,12 @@ fn addresses() -> Vec<Value> {
     }
     out.sort_by_key(|v| if v["kind"] == "tailscale" { 0 } else { 1 });
     out
+}
+
+/// Eco mode from the PC app's own button.
+#[tauri::command]
+fn toggle_eco(app: State<Shared>) {
+    eco::toggle(&app);
 }
 
 /// Drag & drop onto the window: offer the files to the phone.
@@ -79,6 +87,9 @@ fn get_info(app: State<Shared>) -> Value {
         "remoteControl": c.remote_control,
         "autoPhotoSync": c.auto_photo_sync,
         "autostart": c.autostart,
+        "ecoKeep": c.eco_keep.join(", "),
+        "ecoSchedule": c.eco_schedule, "ecoFrom": c.eco_from, "ecoTo": c.eco_to,
+        "ecoOn": eco::ON.load(std::sync::atomic::Ordering::SeqCst),
         "acceptPhoneStream": c.accept_phone_stream,
         "sharePcAudio": c.share_pc_audio,
         "tracks": l.tracks.len(),
@@ -110,6 +121,10 @@ fn save_settings(app: State<Shared>, handle: tauri::AppHandle, s: Value) -> Resu
         if let Some(v) = s["remoteControl"].as_bool() { c.remote_control = v; }
         if let Some(v) = s["autoPhotoSync"].as_bool() { c.auto_photo_sync = v; }
         if let Some(v) = s["autostart"].as_bool() { c.autostart = v; }
+        if let Some(v) = s["ecoSchedule"].as_bool() { c.eco_schedule = v; }
+        if let Some(v) = s["ecoFrom"].as_str() { if v.len() == 5 { c.eco_from = v.into(); } }
+        if let Some(v) = s["ecoTo"].as_str() { if v.len() == 5 { c.eco_to = v.into(); } }
+        if let Some(v) = s["ecoKeep"].as_str() { c.eco_keep = v.split(',').map(|x| x.trim().trim_end_matches(".exe").to_string()).filter(|x| !x.is_empty()).collect(); }
         if let Some(v) = s["acceptPhoneStream"].as_bool() { c.accept_phone_stream = v; }
         if let Some(v) = s["sharePcAudio"].as_bool() { c.share_pc_audio = v; }
         if let Some(v) = s["name"].as_str() { if !v.trim().is_empty() { c.device_name = v.trim().into(); } }
@@ -228,13 +243,31 @@ pub fn run() {
             show_main(app)
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin({
+            // Ctrl+Alt+E turns eco mode on / off from the keyboard
+            let s = shared.clone();
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |_app, shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && shortcut.matches(tauri_plugin_global_shortcut::Modifiers::CONTROL | tauri_plugin_global_shortcut::Modifiers::ALT, tauri_plugin_global_shortcut::Code::KeyE)
+                    {
+                        eco::toggle(&s);
+                    }
+                })
+                .build()
+        })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder, allow_firewall, send_files])
+        .invoke_handler(tauri::generate_handler![get_info, save_settings, set_account, revoke_device, rescan, reveal, open_folder, allow_firewall, send_files, toggle_eco])
         .setup(move |app| {
             let _ = shared.handle.set(app.handle().clone());
             install_sendto();
+            eco::recover(); // never leave apps frozen after a crash
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                let _ = app.global_shortcut().register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyE));
+            }
             share_args(&shared, &std::env::args().collect::<Vec<_>>());
 
             if shared.cfg.read().autostart {
@@ -244,8 +277,9 @@ pub fn run() {
             // tray
             let open = MenuItem::with_id(app, "open", "Open MediaGrid", true, None::<&str>)?;
             let rescan = MenuItem::with_id(app, "rescan", "Rescan library", true, None::<&str>)?;
+            let eco_item = MenuItem::with_id(app, "eco", "Eco mode on / off (Ctrl+Alt+E)", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit MediaGrid", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &rescan, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &rescan, &eco_item, &quit])?;
             let s2 = shared.clone();
             TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -255,6 +289,7 @@ pub fn run() {
                 .on_menu_event(move |app, e| match e.id.as_ref() {
                     "open" => show_main(app),
                     "rescan" => s2.rescan(),
+                    "eco" => eco::toggle(&s2),
                     "quit" => app.exit(0),
                     _ => {}
                 })

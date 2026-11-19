@@ -16,12 +16,13 @@ struct PCView: View {
                     header
                     Picker("", selection: $section.animation(.smooth(duration: 0.2))) {
                         Text("Files").tag(0)
-                        Text("Access PC").tag(1)
+                        Text("Access").tag(1)
+                        Text("Tools").tag(2)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 20)
 
-                    if section == 0 { FilesRoot() } else { AccessPCView() }
+                    if section == 0 { FilesRoot() } else if section == 1 { AccessPCView() } else { ToolsView() }
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -158,6 +159,51 @@ struct AccessPCView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(action == "shutdown" ? Theme.pink : action == "restart" ? Color.orange : action == "lock" ? Theme.cyan : Theme.mint)
+    }
+}
+
+/// Eco mode: the PC freezes its other apps, turns its screen off and slows down; MediaGrid and Tailscale keep running.
+struct EcoCard: View {
+    @EnvironmentObject var conn: Connection
+    @State private var on = false
+    @State private var confirm = false
+    @State private var busy = false
+    private struct Reply: Decodable { var on: Bool }
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    IconBadge(symbol: "leaf.fill", color: Theme.mint, size: 30)
+                    Text("Eco mode").font(.headline)
+                    Spacer()
+                    if busy { ProgressView() }
+                }
+                Text(on ? "Your PC is in eco mode: its other apps are frozen and its screen is off."
+                        : "Freezes every other app on the PC, turns its screen off and slows the processor to save power. Nothing is closed or lost.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button { if on { set(false) } else { confirm = true } } label: {
+                    Label(on ? "Turn eco mode off" : "Turn eco mode on", systemImage: on ? "bolt.fill" : "leaf.fill")
+                        .frame(maxWidth: .infinity).padding(.vertical, 4)
+                }
+                .buttonStyle(.glassProminent).tint(on ? Theme.accent : Theme.mint).foregroundStyle(.white)
+                .disabled(busy || conn.state != .online)
+                Text("On the PC keyboard, Ctrl+Alt+E does the same.").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .task { if let r: Reply = try? await conn.get("/api/eco") { on = r.on } }
+        .confirmationDialog("Turn on eco mode?", isPresented: $confirm, titleVisibility: .visible) {
+            Button("Freeze apps & turn screen off") { set(true) }
+        } message: { Text("Your other apps on the PC are paused, not closed. MediaGrid and Tailscale keep running. Turn it off here to resume them.") }
+    }
+
+    private func set(_ v: Bool) {
+        busy = true
+        Task {
+            defer { busy = false }
+            if let d = try? await conn.request("/api/eco", method: "POST", json: ["on": v]), let r = try? JSONDecoder().decode(Reply.self, from: d) { on = r.on }
+            Haptics.soft()
+        }
     }
 }
 
@@ -407,6 +453,11 @@ struct FolderView: View {
     @State private var busy: String?
     @State private var showHidden = false
     @State private var query = ""
+    @State private var target: FileEntry?
+    @State private var newName = ""
+    @State private var showRename = false
+    @State private var showDelete = false
+    @State private var showNew = false
 
     private var entries: [FileEntry] {
         let e = listing?.entries ?? []
@@ -427,11 +478,13 @@ struct FolderView: View {
                 if e.dir {
                     NavigationLink { FolderView(path: e.path, title: e.name) } label: { FileRow(entry: e) }
                         .listRowBackground(Color.white.opacity(0.04))
+                        .swipeActions { ops(e) }
                 } else {
                     Button { open(e) } label: { FileRow(entry: e, busy: busy == e.path) }
                         .listRowBackground(Color.white.opacity(0.04))
                         .swipeActions {
                             Button { download(e) } label: { Label("Save", systemImage: "square.and.arrow.down") }.tint(Theme.accent)
+                            ops(e)
                         }
                 }
             }
@@ -445,6 +498,7 @@ struct FolderView: View {
         .toolbar {
             if !path.isEmpty {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { newName = ""; showNew = true } label: { Image(systemName: "folder.badge.plus") }
                     Button { importing = true } label: { Image(systemName: "square.and.arrow.up") }
                     Button { showHidden.toggle(); Task { await load() } } label: { Image(systemName: showHidden ? "eye.slash" : "eye") }
                 }
@@ -453,6 +507,19 @@ struct FolderView: View {
         .task { await load() }
         .refreshable { await load() }
         .quickLookPreview($preview)
+        .alert("Rename", isPresented: $showRename) {
+            TextField("Name", text: $newName)
+            Button("Rename") { if let t = target { op(["op": "rename", "path": t.path, "name": newName]) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("New folder", isPresented: $showNew) {
+            TextField("Name", text: $newName)
+            Button("Create") { op(["op": "mkdir", "path": path, "name": newName]) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Move \(target?.name ?? "") to the Recycle Bin?", isPresented: $showDelete, titleVisibility: .visible) {
+            Button("Move to Recycle Bin", role: .destructive) { if let t = target { op(["op": "delete", "path": t.path]) } }
+        }
         .sheet(item: $player) { e in
             StreamVideo(url: conn.url("/api/files/raw", ["path": e.path]), active: true).ignoresSafeArea()
         }
@@ -476,6 +543,18 @@ struct FolderView: View {
                 Haptics.success()
                 await load()
             }
+        }
+    }
+
+    @ViewBuilder private func ops(_ e: FileEntry) -> some View {
+        Button(role: .destructive) { target = e; showDelete = true } label: { Label("Delete", systemImage: "trash") }
+        Button { target = e; newName = e.name; showRename = true } label: { Label("Rename", systemImage: "pencil") }.tint(.orange)
+    }
+
+    private func op(_ body: [String: Any]) {
+        Task {
+            do { try await conn.post("/api/files/op", json: body) } catch { self.error = error.localizedDescription }
+            await load()
         }
     }
 

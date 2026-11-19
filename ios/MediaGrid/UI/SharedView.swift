@@ -190,6 +190,9 @@ struct SharedRow: View {
             if let t = item.text {
                 Button { ClipboardSync.shared.copyFromHistory(t) } label: { Label("Copy", systemImage: "doc.on.doc") }
                 ShareLink(item: t)
+                if t.lowercased().hasPrefix("http") {
+                    Button { Task { try? await Connection.shared.post("/api/pc/open", json: ["url": t.trimmingCharacters(in: .whitespacesAndNewlines)]) } } label: { Label("Open on PC", systemImage: "desktopcomputer") }
+                }
             }
         }
     }

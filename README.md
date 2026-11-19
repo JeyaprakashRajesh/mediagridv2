@@ -160,6 +160,12 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `GET/POST /api/cam/state` | `{camera, mic}` — what the iPhone is currently streaming |
 | `GET/POST /api/vcam`, `POST /api/vcam/install` | virtual webcam (softcam DirectShow filter): status, on/off + flip, one-time registration (UAC, PC app only) |
 | `WS /api/audio/stream` | PC sound → iPhone: binary, first byte 0 = JSON `{rate}`, 1 = s16le stereo PCM |
+| `GET/POST /api/eco` | eco mode on/off `{on}`: freezes the user's other apps, cuts the power plan, screen off (Ctrl+Alt+E, tray, phone) |
+| `GET/POST /api/macros`, `POST /api/macros/run` | one-tap macros `[{id,name,icon,steps:[{kind,value}]}]`; kinds: keys, text, open, wait, eco, lock, sleep |
+| `GET /api/health` | `{cpu, ramUsed, ramTotal, gpu:{name,load,temp,watts,vramUsed,vramTotal,fan}, watts (estimate), eco}` |
+| `GET/POST /api/apps` | windowed programs by memory / `{name, action: suspend\|resume\|close}` |
+| `POST /api/files/op` | `{op: rename\|mkdir\|delete (Recycle Bin)\|move, path, name\|to}` |
+| `POST /api/pc/open`, `POST /api/pc/find` | open an http(s) link on the PC / make the PC beep and notify |
 | `GET/POST /api/presence` | lock the PC when a paired iPhone is gone `minutes` (POST: PC app only) |
 | `GET /api/music/lyrics/{id}` | `{synced, plain}` from LRCLIB, cached on the PC |
 | `POST /api/pc/play` | `{ids, mode: play\|queue}` — play/queue songs in the PC app's own player |
