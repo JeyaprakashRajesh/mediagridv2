@@ -168,6 +168,8 @@ Base: `http://<pc>:47800`. All routes except `/api/ping` and `/api/login` need t
 | `POST /api/pc/open`, `POST /api/pc/find` | open an http(s) link on the PC / make the PC beep and notify |
 | `GET/POST /api/presence` | lock the PC when a paired iPhone is gone `minutes` (POST: PC app only) |
 | `GET /api/music/lyrics/{id}` | `{synced, plain}` from LRCLIB, cached on the PC |
+| `GET/POST /api/music/covers` | poster DB status `{songs, populated, new, movies, withPoster, done, total, found, running}`; POST re-runs the sync (`?force=1` retries misses) |
+| `POST /api/music/art/{id}` | body = JPEG/PNG; becomes the poster of that song's whole movie |
 | `POST /api/pc/play` | `{ids, mode: play\|queue}` — play/queue songs in the PC app's own player |
 | `WS /api/screen/stream?w&fps&kbps` | PC → iPhone H.264 desktop stream (binary = Annex-B access unit; send text `key` for a full frame) |
 | `WS /api/cam/stream` | iPhone → PC: binary messages, first byte 1 = JPEG frame, 2 = PCM audio |

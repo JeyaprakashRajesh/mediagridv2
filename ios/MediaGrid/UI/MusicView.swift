@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// A titled set of collections ("Made for you", "Albums") opened by "View all".
@@ -561,6 +562,8 @@ struct TrackRow: View {
     @EnvironmentObject var music: MusicStore
     @EnvironmentObject var player: Player
     @ObservedObject private var tint = TintStore.shared
+    @State private var pickCover = false
+    @State private var coverItem: PhotosPickerItem?
 
     var body: some View {
         let isCurrent = player.current?.id == track.id
@@ -593,6 +596,17 @@ struct TrackRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu { menuItems }
+        .photosPicker(isPresented: $pickCover, selection: $coverItem, matching: .images)
+        .onChange(of: coverItem) { _, item in
+            guard let item else { return }
+            coverItem = nil
+            Task {
+                guard let d = try? await item.loadTransferable(type: Data.self),
+                      let img = await ImageCache.downsample(d, max: 900),
+                      let jpg = img.jpegData(compressionQuality: 0.85) else { return }
+                await music.setCover(track, jpeg: jpg)
+            }
+        }
     }
 
     @ViewBuilder private var menuItems: some View {
@@ -611,6 +625,7 @@ struct TrackRow: View {
         if let playlist {
             Button(role: .destructive) { music.removeFromPlaylist(track, playlist) } label: { Label("Remove from Playlist", systemImage: "minus.circle") }
         }
+        Button { pickCover = true } label: { Label("Change Cover", systemImage: "photo") }
         Divider()
         if music.isDownloaded(track) {
             Button(role: .destructive) { music.remove(track) } label: { Label("Remove Download", systemImage: "trash") }

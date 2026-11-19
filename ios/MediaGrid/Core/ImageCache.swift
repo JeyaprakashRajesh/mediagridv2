@@ -76,6 +76,12 @@ actor ImageCache {
         return UIImage(cgImage: cg)
     }
 
+    func forget(_ url: URL) {
+        let k = Self.key(url)
+        mem.removeObject(forKey: k as NSString)
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(k + ".jpg"))
+    }
+
     func clear() {
         mem.removeAllObjects()
         try? FileManager.default.removeItem(at: dir)

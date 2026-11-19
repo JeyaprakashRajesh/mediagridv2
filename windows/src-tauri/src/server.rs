@@ -50,7 +50,7 @@ pub async fn run(app: Shared) {
         .route("/api/me", get(me))
         .route("/api/music/tracks", get(tracks))
         .route("/api/music/stream/{id}", get(stream_track))
-        .route("/api/music/art/{id}", get(track_art))
+        .route("/api/music/art/{id}", get(track_art).post(set_art))
         .route("/api/rescan", post(rescan))
         .route("/api/media/items", get(media_items))
         .route("/api/media/file/{id}", get(media_file))
@@ -82,6 +82,7 @@ pub async fn run(app: Shared) {
         .route("/api/pc/find", post(crate::tools::find_pc))
         .route("/api/presence", get(presence_get).post(presence_set))
         .route("/api/music/lyrics/{id}", get(lyrics))
+        .route("/api/music/covers", get(covers_status).post(covers_start))
         .route("/api/pc/play", post(pc_play))
         .route("/api/devices", get(devices))
         .route("/api/playback", get(playback_get).post(playback_set))
@@ -302,8 +303,28 @@ async fn stream_track(State(app): State<Shared>, AxPath(id): AxPath<String>, req
     }
 }
 
+/// Replace a song's cover with an image from the phone (kept in the art cache, survives rescans).
+async fn covers_status() -> Json<Value> { Json(crate::covers::status()) }
+
+/// Re-run the poster sync now (`?force=1` also retries movies that were not found before).
+async fn covers_start(State(app): State<Shared>, Query(q): Q) -> Json<Value> {
+    app.sync_covers(q.get("force").map(|s| s.as_str()) == Some("1"));
+    covers_status().await
+}
+
+/// Set a poster by hand: it becomes the poster of the song's whole movie.
+async fn set_art(State(app): State<Shared>, AxPath(id): AxPath<String>, body: Bytes) -> Response {
+    let Some(album) = app.lib.read().track(&id).map(|t| t.album.clone()) else { return err(StatusCode::NOT_FOUND, "no such track") };
+    if body.len() < 100 || !(body.starts_with(&[0xFF, 0xD8]) || body.starts_with(&[0x89, b'P'])) {
+        return err(StatusCode::UNSUPPORTED_MEDIA_TYPE, "send a JPEG or PNG");
+    }
+    if let Err(e) = crate::covers::set_manual(&id, &album, &body) { return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()); }
+    app.mark_art();
+    Json(json!({ "ok": true })).into_response()
+}
+
 async fn track_art(AxPath(id): AxPath<String>) -> Response {
-    let p = config::cache_dir().join("art").join(format!("{id}.img"));
+    let p = crate::covers::poster_for(&id).unwrap_or_else(|| config::cache_dir().join("art").join(format!("{id}.img")));
     match tokio::fs::read(&p).await {
         Ok(b) => {
             let ct = if b.starts_with(&[0x89, b'P']) { "image/png" } else { "image/jpeg" };

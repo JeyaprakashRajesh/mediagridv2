@@ -173,10 +173,11 @@ impl Library {
                 if !AUDIO.contains(&ext_of(p).as_str()) { continue; }
                 let Ok(meta) = e.metadata() else { continue };
                 let ps = p.to_string_lossy().to_string();
-                let t = match cache.get(&ps) {
+                let mut t = match cache.get(&ps) {
                     Some(c) if c.size == meta.len() && c.added == mtime(&meta) => c.clone(),
                     _ => read_track(p, &meta, root),
                 };
+                if crate::covers::poster_for(&t.id).is_some() { t.has_art = true; } // movie poster from covers.rs
                 if lib.track_map.contains_key(&t.id) { continue; }
                 lib.track_map.insert(t.id.clone(), lib.tracks.len());
                 lib.tracks.push(t);

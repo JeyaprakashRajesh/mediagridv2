@@ -218,6 +218,9 @@ struct ProfileView: View {
             toggleRow("platter.filled.top.iphone", Theme.pink, "Dynamic Island & Lock Screen", $liveActivity)
             toggleRow("shuffle", Theme.mint, "Shuffle by default", $player.shuffle)
             toggleRow("arrow.down.circle", Theme.cyan, "Auto-download favourites (Wi-Fi + charging)", $autoDownload)
+            Button { Task { await music.fetchCovers(force: true) } } label: {
+                HStack { Label("Fetch movie posters", systemImage: "photo.on.rectangle.angled"); Spacer(); Text(music.coverStatus).font(.caption).foregroundStyle(.secondary) }
+            }
             toggleRow("dot.radiowaves.left.and.right", Theme.accent, "Autoplay similar songs", $autoplayGenre)
             row("chart.bar.fill", Theme.cyan, "Song ranking") {
                 Picker("Song ranking", selection: $rankMethod) {

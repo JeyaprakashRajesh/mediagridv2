@@ -124,7 +124,36 @@ final class MusicStore: ObservableObject {
     }
 
     func artURL(_ t: Track) -> URL? {
-        t.has_art ? Connection.shared.url("/api/music/art/\(t.id)") : nil
+        guard t.has_art || artVersion[t.id] != nil || artEpoch > 0 else { return nil }
+        return Connection.shared.url("/api/music/art/\(t.id)", ["v": String((artVersion[t.id] ?? 0) + artEpoch)])
+    }
+
+    /// Bumped when a cover is replaced so every view reloads it.
+    @Published var artVersion: [String: Int] = [:]
+    @Published var artEpoch = 0
+    @Published var coverStatus = ""
+
+    /// Ask the PC to swap the shared default cover for each movie's real cover; reloads artwork when done.
+    func fetchCovers(force: Bool = false) async {
+        struct S: Decodable { let running: Bool; let done: Int; let total: Int; let found: Int; let songs: Int; let populated: Int }
+        coverStatus = "Starting…"
+        _ = try? await Connection.shared.post("/api/music/covers", query: force ? ["force": "1"] : [:], json: [String: String]())
+        while true {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let s: S = try? await Connection.shared.get("/api/music/covers") else { coverStatus = ""; return }
+            coverStatus = "\(s.populated)/\(s.songs) songs · movies \(s.done)/\(s.total), \(s.found) found"
+            if !s.running { break }
+        }
+        await ImageCache.shared.clear()
+        await refresh()
+        artEpoch += 1
+    }
+
+    /// A new poster applies to the whole movie, so reload every cover.
+    func setCover(_ t: Track, jpeg: Data) async {
+        do { try await Connection.shared.upload("/api/music/art/\(t.id)", query: [:], data: jpeg) } catch { return }
+        await ImageCache.shared.clear()
+        artEpoch += 1
     }
 
     var downloadedBytes: Int64 {

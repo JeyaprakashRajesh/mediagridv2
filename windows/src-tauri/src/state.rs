@@ -264,6 +264,20 @@ impl App {
         self.push(serde_json::json!({ "event": "shared", "item": item }));
     }
 
+    /// Link new songs to their movie and fetch missing posters (background); every song of a movie shares one poster.
+    pub fn sync_covers(self: &Shared, force: bool) {
+        let t = self.lib.read().tracks.iter().map(|t| (t.id.clone(), t.album.clone())).collect();
+        let me = self.clone();
+        crate::covers::sync(t, force, move || me.mark_art());
+    }
+
+    /// Flag tracks that now have a poster so the phone asks for it.
+    pub fn mark_art(self: &Shared) {
+        for t in self.lib.write().tracks.iter_mut() {
+            if crate::covers::poster_for(&t.id).is_some() { t.has_art = true; }
+        }
+    }
+
     pub fn rescan(self: &Shared) {
         if self.lib.read().scanning {
             // a scan is running: run one more when it finishes
@@ -283,6 +297,7 @@ impl App {
             *me.lib.write() = lib;
             let todo: Vec<(String, String)> = me.lib.read().tracks.iter().map(|t| (t.id.clone(), t.path.clone())).collect();
             crate::genre::analyze_missing(todo);
+            me.sync_covers(false);
             me.ui("scan", serde_json::json!({ "scanning": false, "tracks": nt, "media": nm }));
             me.push(serde_json::json!({ "event": "library", "tracks": nt, "media": nm }));
             if me.rescan_pending.swap(false, Ordering::SeqCst) {

@@ -1,6 +1,7 @@
 mod clip;
 mod config;
 mod control;
+mod covers;
 mod eco;
 mod genre;
 mod lyrics;
