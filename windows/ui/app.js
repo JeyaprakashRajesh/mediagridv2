@@ -416,6 +416,7 @@ function renderSettings() {
   for (const [id, list] of [["music-dirs", info.musicDirs], ["media-dirs", info.mediaDirs]]) { const el = $("#" + id); el.innerHTML = ""; (list || []).forEach((v) => el.append(folderRow(v))); }
   for (const [id, v] of [["photo-dir", info.photoSyncDir], ["inbox-dir", info.inboxDir]]) { const el = $("#" + id); el.innerHTML = ""; const r = folderRow(v); r.querySelector("[data-del]").remove(); el.append(r); }
   $("#s-autostart").checked = info.autostart; $("#s-clip").checked = info.clipboardSync; $("#s-remote").checked = info.remoteControl; $("#s-photos").checked = info.autoPhotoSync;
+  $("#s-accept").checked = info.acceptPhoneStream; $("#s-pcaudio").checked = info.sharePcAudio;
   $("#clip-toggle").checked = info.clipboardSync;
 }
 $$("[data-add]").forEach((b) => (b.onclick = () => $("#" + b.dataset.add).append(folderRow(""))));
@@ -424,6 +425,7 @@ $("#settings-save").onclick = async () => {
   await invoke("save_settings", { s: {
     musicDirs: vals("music-dirs"), mediaDirs: vals("media-dirs"), photoSyncDir: vals("photo-dir")[0], inboxDir: vals("inbox-dir")[0],
     autostart: $("#s-autostart").checked, clipboardSync: $("#s-clip").checked, remoteControl: $("#s-remote").checked, autoPhotoSync: $("#s-photos").checked,
+    acceptPhoneStream: $("#s-accept").checked, sharePcAudio: $("#s-pcaudio").checked,
   } });
   toast("Settings saved"); refreshInfo();
 };

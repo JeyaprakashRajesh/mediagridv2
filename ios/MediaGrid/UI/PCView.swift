@@ -237,7 +237,7 @@ struct RemoteDesktopView: View {
     private func connect() {
         let p = Self.presets[quality]
         stream.start(w: p.w, fps: p.fps, kbps: p.kbps)
-        if pcSound { audio.start(url: conn.url("/api/audio/stream"), session: conn.session) }
+        if pcSound && !AudioBridge.shared.enabled { audio.start(url: conn.url("/api/audio/stream"), session: conn.session) }   // the setting already plays it
     }
 
     private var connectCard: some View {

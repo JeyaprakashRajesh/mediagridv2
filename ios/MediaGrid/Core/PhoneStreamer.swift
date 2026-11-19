@@ -22,6 +22,10 @@ final class PhoneStreamer: ObservableObject {
         if camera, !(await AVCaptureDevice.requestAccess(for: .video)) { error = "Allow camera access for MediaGrid in Settings."; return }
         if mic, !(await AVAudioApplication.requestRecordPermission()) { error = "Allow microphone access for MediaGrid in Settings."; return }
         let c = Connection.shared
+        if let o: StreamOptions = try? await c.get("/api/stream/options"), !o.acceptPhoneStream {
+            error = "Turn on “Accept iPhone camera & microphone” in the PC app, under Settings."
+            return
+        }
         let link = CamLink(url: c.url("/api/cam/stream"), session: c.session)
         self.link = link
         if camera { guard startCamera(back: back, link: link) else { link.close(); self.link = nil; return } }

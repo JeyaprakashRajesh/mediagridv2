@@ -62,7 +62,9 @@ struct RootView: View {
             }
         }
         .task(id: player.current?.id ?? music.recentlyPlayed.first?.track.id) { await tint.update(for: player.current ?? music.recentlyPlayed.first?.track) }
+        .onChange(of: conn.state) { _, _ in AudioBridge.shared.apply() }
         .task {
+            AudioBridge.shared.apply()
             await music.refresh()
             await media.refresh()
         }

@@ -79,6 +79,8 @@ fn get_info(app: State<Shared>) -> Value {
         "remoteControl": c.remote_control,
         "autoPhotoSync": c.auto_photo_sync,
         "autostart": c.autostart,
+        "acceptPhoneStream": c.accept_phone_stream,
+        "sharePcAudio": c.share_pc_audio,
         "tracks": l.tracks.len(),
         "media": l.media.len(),
         "photos": l.media.iter().filter(|m| m.kind == "photo").count(),
@@ -108,6 +110,8 @@ fn save_settings(app: State<Shared>, handle: tauri::AppHandle, s: Value) -> Resu
         if let Some(v) = s["remoteControl"].as_bool() { c.remote_control = v; }
         if let Some(v) = s["autoPhotoSync"].as_bool() { c.auto_photo_sync = v; }
         if let Some(v) = s["autostart"].as_bool() { c.autostart = v; }
+        if let Some(v) = s["acceptPhoneStream"].as_bool() { c.accept_phone_stream = v; }
+        if let Some(v) = s["sharePcAudio"].as_bool() { c.share_pc_audio = v; }
         if let Some(v) = s["name"].as_str() { if !v.trim().is_empty() { c.device_name = v.trim().into(); } }
         dirs_changed = old != (c.music_dirs.clone(), c.media_dirs.clone(), c.photo_sync_dir.clone());
         autostart = c.autostart;

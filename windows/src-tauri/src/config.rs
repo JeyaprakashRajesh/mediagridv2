@@ -39,6 +39,10 @@ pub struct Config {
     /// Lock the PC when a paired iPhone has been disconnected for `away_minutes`.
     pub lock_when_away: bool,
     pub away_minutes: u32,
+    /// Accept the iPhone camera / microphone stream (virtual webcam, mic playback).
+    pub accept_phone_stream: bool,
+    /// Let the iPhone listen to this PC's sound.
+    pub share_pc_audio: bool,
     /// token -> device name
     pub tokens: HashMap<String, String>,
 }
@@ -68,6 +72,8 @@ impl Default for Config {
             autostart: true,
             lock_when_away: false,
             away_minutes: 3,
+            accept_phone_stream: true,
+            share_pc_audio: true,
             tokens: HashMap::new(),
         }
     }

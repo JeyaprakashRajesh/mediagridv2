@@ -12,6 +12,9 @@ struct ProfileView: View {
     @AppStorage("mg.appearance") private var appearance = 0
     @AppStorage("mg.autoplayGenre") private var autoplayGenre = true
     @AppStorage("mg.rankMethod") private var rankMethod = 0
+    @AppStorage("mg.bridgePC") private var bridgePC = false
+    @ObservedObject private var streamer = PhoneStreamer.shared
+    @ObservedObject private var bridge = AudioBridge.shared
     @State private var editingHost = false
     @State private var newHost = ""
     @State private var confirmSignOut = false
@@ -28,6 +31,7 @@ struct ProfileView: View {
                         connectionSection
                         backupSection
                         musicSection
+                        audioSection
                         preferencesSection
                         storageSection
                         Button(role: .destructive) { confirmSignOut = true } label: {
@@ -180,6 +184,24 @@ struct ProfileView: View {
             Haptics.success()
             try? await Task.sleep(for: .seconds(2))
             await music.refresh()
+        }
+    }
+
+    /// PC sound on the iPhone, and the iPhone mic on the PC. Both ride on Wi-Fi / Tailscale through the app.
+    private var audioSection: some View {
+        section("Audio bridge") {
+            toggleRow("speaker.wave.2.fill", Theme.cyan, "Hear PC sound on iPhone", $bridgePC)
+                .onChange(of: bridgePC) { _, _ in AudioBridge.shared.apply() }
+            if let n = bridge.note, bridgePC {
+                Text(n).font(.caption).foregroundStyle(Theme.pink).padding(.horizontal, 14).padding(.bottom, 6)
+            }
+            row("mic.fill", Theme.pink, "Share iPhone mic with PC") {
+                Toggle("", isOn: Binding(get: { streamer.running }, set: { on in
+                    Task { if on { await streamer.start(camera: false, mic: true, back: false) } else { await streamer.stop() } }
+                })).labelsHidden().tint(Theme.accent)
+            }
+            Text("PC sound keeps playing when you leave the app, but stops if you swipe MediaGrid away: iOS never lets an app run after that. Bluetooth can't send PC sound to an iPhone, and iOS doesn't let apps capture other apps' sound. To send everything the iPhone plays to the PC with no app open, connect the iPhone to a Bluetooth audio receiver or an AirPlay receiver app on the PC.")
+                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.bottom, 10)
         }
     }
 

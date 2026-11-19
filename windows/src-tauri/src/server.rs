@@ -70,6 +70,7 @@ pub async fn run(app: Shared) {
         .route("/api/screen", get(screen))
         .route("/api/screen/stream", get(screen_stream))
         .route("/api/audio/stream", get(audio_stream))
+        .route("/api/stream/options", get(stream_options))
         .route("/api/presence", get(presence_get).post(presence_set))
         .route("/api/music/lyrics/{id}", get(lyrics))
         .route("/api/pc/play", post(pc_play))
@@ -502,7 +503,8 @@ static MIC: Lazy<broadcast::Sender<Bytes>> = Lazy::new(|| broadcast::channel(32)
 static CAM_STATE: Lazy<parking_lot::RwLock<Value>> = Lazy::new(|| parking_lot::RwLock::new(json!({ "camera": false, "mic": false })));
 
 /// The phone's one persistent socket: binary messages, first byte 1 = JPEG frame, 2 = PCM audio.
-async fn cam_stream(ws: WebSocketUpgrade) -> Response {
+async fn cam_stream(ws: WebSocketUpgrade, State(app): State<Shared>) -> Response {
+    if !app.cfg.read().accept_phone_stream { return err(StatusCode::FORBIDDEN, "Accepting the iPhone camera and mic is turned off in the PC app (Settings)."); }
     ws.on_upgrade(|mut socket| async move {
         while let Some(Ok(msg)) = socket.recv().await {
             if let Message::Binary(b) = msg {
@@ -517,12 +519,14 @@ async fn cam_stream(ws: WebSocketUpgrade) -> Response {
     })
 }
 
-async fn cam_frame(body: Bytes) -> Json<Value> {
+async fn cam_frame(State(app): State<Shared>, body: Bytes) -> Json<Value> {
+    if !app.cfg.read().accept_phone_stream { return Json(json!({ "ok": false })); }
     let _ = CAM.send(body); // no viewers = nobody to send to; not an error
     Json(json!({ "ok": true }))
 }
 
-async fn cam_audio_in(body: Bytes) -> Json<Value> {
+async fn cam_audio_in(State(app): State<Shared>, body: Bytes) -> Json<Value> {
+    if !app.cfg.read().accept_phone_stream { return Json(json!({ "ok": false })); }
     let _ = MIC.send(body);
     Json(json!({ "ok": true }))
 }
@@ -554,6 +558,7 @@ async fn vcam_install(State(app): State<Shared>, axum::Extension(w): axum::Exten
 }
 
 async fn cam_state_set(State(app): State<Shared>, Json(b): Json<Value>) -> Json<Value> {
+    if !app.cfg.read().accept_phone_stream { return Json(json!({ "ok": false })); }
     let v = json!({ "camera": b["camera"].as_bool().unwrap_or(false), "mic": b["mic"].as_bool().unwrap_or(false) });
     // once registered, the iPhone camera simply becomes the PC's webcam
     if crate::vcam::installed() { crate::vcam::set_on(v["camera"].as_bool().unwrap_or(false)); }
@@ -806,10 +811,16 @@ async fn screen_stream(ws: WebSocketUpgrade, State(app): State<Shared>, Query(q)
     })
 }
 
+/// What the PC app currently allows, so the phone can explain a refusal instead of failing silently.
+async fn stream_options(State(app): State<Shared>) -> Json<Value> {
+    let c = app.cfg.read();
+    Json(json!({ "acceptPhoneStream": c.accept_phone_stream, "sharePcAudio": c.share_pc_audio && c.remote_control }))
+}
+
 /// PC sound over a WebSocket: see control::stream_audio for the message format.
 async fn audio_stream(ws: WebSocketUpgrade, State(app): State<Shared>) -> Response {
-    if !app.cfg.read().remote_control {
-        return err(StatusCode::FORBIDDEN, "Remote control is turned off on the PC.");
+    if !app.cfg.read().remote_control || !app.cfg.read().share_pc_audio {
+        return err(StatusCode::FORBIDDEN, "Sharing PC sound is turned off in the PC app (Settings).");
     }
     ws.on_upgrade(|mut socket| async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);

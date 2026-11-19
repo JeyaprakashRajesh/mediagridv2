@@ -12,11 +12,15 @@ final class PCAudio: @unchecked Sendable {
     private let lock = NSLock()
     private var queued = 0
     private var playing = false
+    var onEnd: (() -> Void)?   // the connection dropped (not called by stop())
 
-    func start(url: URL, session: URLSession) {
+    func start(url: URL, session: URLSession, record: Bool = false) {
         stop()
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        // keep the microphone path alive when the iPhone mic is being shared at the same time
+        let s = AVAudioSession.sharedInstance()
+        if record { try? s.setCategory(.playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .mixWithOthers]) }
+        else { try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers]) }
+        try? s.setActive(true)
         let t = session.webSocketTask(with: url)
         task = t
         t.resume()
@@ -34,7 +38,8 @@ final class PCAudio: @unchecked Sendable {
 
     private func receive(_ t: URLSessionWebSocketTask) {
         t.receive { [weak self] result in
-            guard let self, self.task === t, case .success(let msg) = result else { return }
+            guard let self, self.task === t else { return }
+            guard case .success(let msg) = result else { self.task = nil; self.onEnd?(); return }
             if case .data(let d) = msg, let kind = d.first {
                 if kind == 0 { self.setup(Data(d.dropFirst())) } else if kind == 1 { self.play(Data(d.dropFirst())) }
             }
