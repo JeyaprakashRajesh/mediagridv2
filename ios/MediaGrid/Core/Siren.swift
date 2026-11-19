@@ -26,7 +26,7 @@ final class Siren {
                 phase += 2 * .pi * f / rate
                 if phase > 2 * .pi { phase -= 2 * .pi }
                 let v: Float = sin(phase) > 0 ? 0.9 : -0.9           // square wave: as loud as it gets
-                for b in bufs { b.mutableData.assumingMemoryBound(to: Float.self)[i] = v }
+                for b in bufs { b.mData?.assumingMemoryBound(to: Float.self)[i] = v }
             }
             return noErr
         }
