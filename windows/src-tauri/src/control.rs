@@ -222,7 +222,8 @@ pub fn stream_h264(
     key: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     use openh264::encoder::{Encoder, EncoderConfig};
-    use openh264::formats::YUVBuffer;
+    use openh264::formats::{RgbSliceU8, YUVBuffer};
+    use openh264::OpenH264API;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
@@ -255,17 +256,17 @@ pub fn stream_h264(
         last_sig = sig;
 
         if enc.is_none() || dims != (tw, th) {
-            let cfg = EncoderConfig::new(tw, th)
+            let cfg = EncoderConfig::new()
                 .set_bitrate_bps(kbps.clamp(500, 40_000) * 1000)
                 .max_frame_rate(fps as f32);
-            match Encoder::with_config(cfg) {
+            match Encoder::with_api_config(OpenH264API::from_source(), cfg) {
                 Ok(e) => { enc = Some(e); dims = (tw, th); }
                 Err(_) => return,
             }
         }
         let Some(e) = enc.as_mut() else { return };
         if force { e.force_intra_frame(); }
-        let yuv = YUVBuffer::with_rgb(tw as usize, th as usize, raw);
+        let yuv = YUVBuffer::from_rgb_source(RgbSliceU8::new(raw, (tw as usize, th as usize)));
         let Ok(bits) = e.encode(&yuv) else { continue };
         let data = bits.to_vec();
         if !data.is_empty() {
