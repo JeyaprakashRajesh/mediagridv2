@@ -349,3 +349,73 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px;
 .nav { justify-content: center; padding: 12px; }
 .nav span { display: none; }
 .nav svg { width: 22px; height: 22px; }
+
+/* smart mix modal & cards */
+.smartmix-modal {
+  position: fixed; inset: 0; z-index: 80;
+  display: grid; place-items: center;
+  background: rgba(5, 4, 13, 0.7);
+  backdrop-filter: blur(16px);
+  padding: 16px;
+  animation: smFade .2s var(--ease);
+}
+@keyframes smFade { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+.smartmix-dialog {
+  width: min(680px, 94vw);
+  max-height: 90vh;
+  border-radius: 24px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+}
+.smartmix-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.sm-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 10px; border-radius: 14px;
+  background: var(--hover); border: 1px solid var(--stroke);
+  text-align: left; cursor: pointer; transition: all .2s var(--ease);
+}
+.sm-card:hover { background: var(--hover-2); transform: translateY(-2px); }
+.sm-card.active {
+  background: rgba(var(--accent-rgb), 0.18);
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.2);
+}
+.sm-card .sm-emoji { font-size: 20px; line-height: 1; margin-bottom: 2px; }
+.sm-card b { font-size: 13px; color: var(--text); }
+.sm-card small { font-size: 11px; color: var(--muted); }
+.sm-extra { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.sm-select {
+  flex: 1; padding: 8px 12px; border-radius: 10px;
+  border: 1px solid var(--stroke-2); background: var(--hover-2);
+  color: var(--text); outline: none; font-size: 13px;
+}
+.sm-preview-box {
+  border-radius: 16px; padding: 12px;
+  background: var(--input); border: 1px solid var(--stroke);
+  display: flex; flex-direction: column;
+}
+.sm-tracklist {
+  max-height: 190px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sm-trow {
+  display: grid; grid-template-columns: 24px 1.4fr 1fr 65px 45px;
+  gap: 8px; align-items: center; padding: 5px 8px;
+  border-radius: 8px; font-size: 12.5px;
+}
+.sm-trow:hover { background: var(--hover); }
+.sm-trow .bpm { font-size: 11px; color: var(--muted); text-align: right; }
+.sm-trow .dur { font-size: 11px; color: var(--faint); text-align: right; }
+.sm-name-input {
+  flex: 1; min-width: 180px; height: 38px;
+  padding: 0 12px; border-radius: 10px;
+  background: var(--input); border: 1px solid var(--stroke);
+  outline: none; font-size: 13px; color: var(--text);
+}

@@ -385,7 +385,7 @@ struct RemoteDesktopView: View {
     }
 
     private func drag(_ v: DragGesture.Value, fit: CGRect) {
-        guard stream.connected, Date().timeIntervalSince(lastSent) > 0.016 else { return }
+        guard stream.connected, fit.width > 0, fit.height > 0, Date().timeIntervalSince(lastSent) > 0.016 else { return }
         lastSent = Date()
         switch mode {
         case 0:
@@ -406,7 +406,7 @@ struct RemoteDesktopView: View {
 
     private func end(_ v: DragGesture.Value, fit: CGRect) {
         last = nil
-        guard stream.connected, hypot(v.translation.width, v.translation.height) < 8, mode != 2 else { return }
+        guard stream.connected, fit.width > 0, fit.height > 0, hypot(v.translation.width, v.translation.height) < 8, mode != 2 else { return }
         if mode == 0 {
             let x = (v.location.x - fit.minX) / fit.width, y = (v.location.y - fit.minY) / fit.height
             guard (0...1).contains(x), (0...1).contains(y) else { return }
@@ -428,6 +428,7 @@ struct RemoteDesktopView: View {
     }
 
     private func fitted(_ img: CGSize, in box: CGSize) -> CGRect {
+        guard img.width > 0, img.height > 0, box.width > 0, box.height > 0 else { return .zero }
         let s = min(box.width / img.width, box.height / img.height)
         let w = img.width * s, h = img.height * s
         return CGRect(x: (box.width - w) / 2, y: (box.height - h) / 2, width: w, height: h)

@@ -10,6 +10,8 @@ struct SharedView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importing = false
     @State private var sending = false
+    @State private var sendingText = false
+    @State private var customText = ""
     @State private var preview: URL?
     @State private var error: String?
 
@@ -27,6 +29,7 @@ struct SharedView: View {
                         .padding(.top, 6)
                         clipboardRow
                         sendButtons
+                        shareSheetTip
                         historyBox
                     }
                     .padding(.horizontal, 20)
@@ -43,6 +46,13 @@ struct SharedView: View {
             .onChange(of: photoItems) { _, items in
                 guard !items.isEmpty else { return }
                 Task { await sendPhotos(items); photoItems = [] }
+            }
+            .alert("Send to PC", isPresented: $sendingText) {
+                TextField("Enter text or paste a link…", text: $customText)
+                Button("Send to PC") { sendCustomText() }
+                Button("Cancel", role: .cancel) { customText = "" }
+            } message: {
+                Text("Text or web links are copied directly to your PC clipboard and saved in Shared history.")
             }
             .quickLookPreview($preview)
         }
@@ -67,22 +77,50 @@ struct SharedView: View {
 
     private var sendButtons: some View {
         GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                PhotosPicker(selection: $photoItems, maxSelectionCount: 30, matching: .any(of: [.images, .videos])) {
-                    sendLabel("Send photos") {
-                        Image(systemName: "photo.on.rectangle.angled").font(.system(size: 28))
-                            .foregroundStyle(LinearGradient(colors: [.orange, .pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    PhotosPicker(selection: $photoItems, maxSelectionCount: 30, matching: .any(of: [.images, .videos])) {
+                        sendLabel("Send photos") {
+                            Image(systemName: "photo.on.rectangle.angled").font(.system(size: 26))
+                                .foregroundStyle(LinearGradient(colors: [.orange, .pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        }
+                    }
+                    Button { importing = true } label: {
+                        sendLabel("Send files") {
+                            Image(systemName: "folder.fill").font(.system(size: 26)).foregroundStyle(Color(hex: 0x3B8EF0))
+                        }
                     }
                 }
-                Button { importing = true } label: {
-                    sendLabel("Send files") {
-                        Image(systemName: "folder.fill").font(.system(size: 28)).foregroundStyle(Color(hex: 0x3B8EF0))
+                HStack(spacing: 12) {
+                    Button { pasteAndSend() } label: {
+                        sendLabel("Paste to PC") {
+                            Image(systemName: "doc.on.clipboard.fill").font(.system(size: 26)).foregroundStyle(Theme.mint)
+                        }
+                    }
+                    Button { sendingText = true } label: {
+                        sendLabel("Send text / link") {
+                            Image(systemName: "paperplane.fill").font(.system(size: 26)).foregroundStyle(Theme.accent)
+                        }
                     }
                 }
             }
         }
         .buttonStyle(.plain)
         .overlay { if sending { ProgressView().padding().glassEffect(.regular, in: .circle) } }
+    }
+
+    private var shareSheetTip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "square.and.arrow.up")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+            Text("Tip: In Safari, Photos, or Files, tap **Share** and choose **MediaGrid** to copy directly to your PC.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 
     private func sendLabel<I: View>(_ t: String, @ViewBuilder icon: () -> I) -> some View {
@@ -156,6 +194,39 @@ struct SharedView: View {
         }
         sending = false
         Haptics.success()
+    }
+
+    private func pasteAndSend() {
+        guard let s = UIPasteboard.general.string, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            Coordinator.shared.show("Clipboard is empty")
+            return
+        }
+        Task {
+            do {
+                try await store.sendText(s)
+                Coordinator.shared.show("Copied clipboard to PC")
+                Haptics.success()
+                await store.refresh()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    private func sendCustomText() {
+        let t = customText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        customText = ""
+        Task {
+            do {
+                try await store.sendText(t)
+                Coordinator.shared.show("Copied to PC clipboard")
+                Haptics.success()
+                await store.refresh()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }
 

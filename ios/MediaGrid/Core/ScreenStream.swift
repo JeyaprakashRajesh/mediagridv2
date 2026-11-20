@@ -94,7 +94,7 @@ final class H264Display: @unchecked Sendable {
         }
         if fmt == nil, let sps, let pps { fmt = Self.format(sps, pps); if let f = fmt { let d = CMVideoFormatDescriptionGetDimensions(f); onSize?(CGSize(width: Int(d.width), height: Int(d.height))) } }
         guard let fmt, !avcc.isEmpty, let sb = Self.sample(avcc, fmt) else { return }
-        if layer.status == .failed { layer.flush(); onNeedKey?(); return }   // decoder hiccup: restart from a full frame
+        if layer.status == .failed { layer.flushAndRemoveImage(); onNeedKey?(); return }   // decoder hiccup: restart from a full frame
         layer.enqueue(sb)
     }
 
@@ -115,14 +115,29 @@ final class H264Display: @unchecked Sendable {
     private static func sample(_ avcc: Data, _ fmt: CMVideoFormatDescription) -> CMSampleBuffer? {
         var block: CMBlockBuffer?
         let n = avcc.count
-        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: n, blockAllocator: nil, customBlockSource: nil,
-                                                 offsetToData: 0, dataLength: n, flags: 0, blockBufferOut: &block) == noErr, let block else { return nil }
-        let ok = avcc.withUnsafeBytes { CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: n) }
+        guard n > 0 else { return nil }
+
+        let okAlloc = avcc.withUnsafeBytes { raw in
+            guard raw.baseAddress != nil else { return -1 }
+            return CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: n, blockAllocator: kCFAllocatorDefault,
+                                                     customBlockSource: nil, offsetToData: 0, dataLength: n, flags: 0, blockBufferOut: &block)
+        }
+        guard okAlloc == noErr, let block else { return nil }
+        let ok = avcc.withUnsafeBytes { raw -> OSStatus in
+            guard let base = raw.baseAddress else { return -1 }
+            return CMBlockBufferReplaceDataBytes(with: base, blockBuffer: block, offsetIntoDestination: 0, dataLength: n)
+        }
         guard ok == noErr else { return nil }
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 30),
+            presentationTimeStamp: CMTime(value: CMTimeValue(CACurrentMediaTime() * 1000), timescale: 1000),
+            decodeTimeStamp: .invalid
+        )
         var sb: CMSampleBuffer?
         var size = n
-        guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: fmt, sampleCount: 1, sampleTimingEntryCount: 0,
-                                        sampleTimingArray: nil, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sb) == noErr, let sb else { return nil }
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: fmt, sampleCount: 1, sampleTimingEntryCount: 1,
+                                        sampleTimingArray: &timing, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sb) == noErr, let sb else { return nil }
         if let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true) as? [NSMutableDictionary], let d = arr.first {
             d[kCMSampleAttachmentKey_DisplayImmediately] = true   // live stream: show as soon as decoded
         }
@@ -154,6 +169,7 @@ struct StreamLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
         v.backgroundColor = .black
+        display.layer.removeFromSuperlayer()
         v.layer.addSublayer(display.layer)
         return v
     }
@@ -161,7 +177,18 @@ struct StreamLayerView: UIViewRepresentable {
     func updateUIView(_ v: UIView, context: Context) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        if display.layer.superlayer !== v.layer {
+            display.layer.removeFromSuperlayer()
+            v.layer.addSublayer(display.layer)
+        }
         display.layer.frame = v.bounds
+        CATransaction.commit()
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        uiView.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
         CATransaction.commit()
     }
 }

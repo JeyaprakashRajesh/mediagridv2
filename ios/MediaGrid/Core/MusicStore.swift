@@ -425,6 +425,40 @@ final class MusicStore: ObservableObject {
         out.append(SmartMix(id: "recent", title: "Recently Added", subtitle: "Fresh in your library", symbol: "sparkles",
                             colors: [Color(hex: 0xC8601A)], tracks: Array(recent)))
 
+        // Spotify-style Daylist: dynamic time-of-day mix updating throughout the day
+        let hour = Calendar.current.component(.hour, from: .now)
+        let weekday = Calendar.current.component(.weekday, from: .now)
+        let days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        let dayName = days[max(0, min(6, weekday - 1))]
+
+        let (slotDesc, bpmLow, bpmHigh, eLow, eHigh, dayColors, daySymbol): (String, Double, Double, Double, Double, [Color], String) = {
+            if hour >= 5 && hour < 12 {
+                return ("\(dayName) Morning Acoustic Rise", 75.0, 115.0, 0.0, 0.55, [Color(hex: 0xF59E0B), Color(hex: 0xD97706)], "sun.max.fill")
+            } else if hour >= 12 && hour < 17 {
+                return ("\(dayName) Afternoon Groove & Focus", 100.0, 130.0, 0.45, 0.85, [Color(hex: 0x06B6D4), Color(hex: 0x3B82F6)], "bolt.fill")
+            } else if hour >= 17 && hour < 22 {
+                return ("\(dayName) Evening Golden Vibe", 90.0, 125.0, 0.35, 0.75, [Color(hex: 0x8B5CF6), Color(hex: 0xEC4899)], "sunset.fill")
+            } else {
+                return ("\(dayName) Late Night Chill Ambient", 60.0, 105.0, 0.0, 0.45, [Color(hex: 0x4F46E5), Color(hex: 0x1E1B4B)], "moon.stars.fill")
+            }
+        }()
+
+        let scores = popularityScores()
+        var dayCandidates = tracks.filter { t in
+            if let bpm = t.bpm, (bpm < bpmLow || bpm > bpmHigh) { return false }
+            if let e = t.energy, (e < eLow || e > eHigh) { return false }
+            return true
+        }
+        if dayCandidates.count < 8 { dayCandidates = tracks }
+        let dayPicks = dayCandidates.map { ($0, (scores[$0.id] ?? 0) + Double.random(in: 0..<2, using: &rng)) }
+            .sorted { $0.1 > $1.1 }
+            .prefix(50)
+            .map(\.0)
+        if dayPicks.count >= 6 {
+            out.append(SmartMix(id: "daylist", title: "Daylist", subtitle: slotDesc,
+                                symbol: daySymbol, colors: dayColors, tracks: Array(dayPicks)))
+        }
+
         // Daily mixes: built around the artists you play most, topped up with random songs to 100
         var score: [String: Int] = [:]
         for t in tracks {
@@ -432,7 +466,6 @@ final class MusicStore: ObservableObject {
         }
         let topArtists = score.sorted { $0.value > $1.value }.map(\.key).filter { $0 != "Unknown Artist" }
         let palettes = [Color(hex: 0x7345C9), Color(hex: 0x2F8F5B), Color(hex: 0xB4541E), Color(hex: 0x9A3F9A)]
-        let scores = popularityScores()
         var used = Set<String>()
         var mixNo = 1
         for (i, a) in topArtists.enumerated() where mixNo <= 4 && !used.contains(a) {

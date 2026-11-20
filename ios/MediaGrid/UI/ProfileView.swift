@@ -57,11 +57,15 @@ struct ProfileView: View {
                 TextField("100.x.x.x:47800", text: $newHost).textInputAutocapitalization(.never)
                 Button("Use") {
                     let h = Connection.normalize(newHost)
+                    guard !h.isEmpty else { return }
+                    conn.remember(h)
                     Task {
                         if await conn.ping(h) != nil {
-                            conn.host = h; conn.remember(h)
+                            conn.host = h
                             UserDefaults.standard.set(h, forKey: "mg.host")
                             conn.connect()
+                        } else {
+                            Coordinator.shared.show("Saved \(h). MediaGrid will connect when reachable.")
                         }
                     }
                 }
@@ -125,10 +129,29 @@ struct ProfileView: View {
                 }
                 .buttonStyle(.plain)
             }
+            if conn.knownHosts.count > 1 {
+                ForEach(conn.knownHosts.filter { $0 != conn.host }, id: \.self) { h in
+                    Button {
+                        conn.host = h
+                        UserDefaults.standard.set(h, forKey: "mg.host")
+                        conn.connect()
+                    } label: {
+                        row(h.hasPrefix("100.") ? "lock.shield" : "network", .secondary, h.hasPrefix("100.") ? "Tailscale alternative" : "LAN alternative") {
+                            value(h)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             HStack {
                 Button("Change address") { newHost = conn.host; editingHost = true }.buttonStyle(.glass)
                 Spacer()
-                Button("Reconnect") { conn.connect() }.buttonStyle(.glass)
+                Button("Reconnect") {
+                    Task {
+                        await conn.findReachableHost()
+                        conn.connect()
+                    }
+                }.buttonStyle(.glass)
             }
             .font(.subheadline.weight(.semibold)).padding(12)
         }

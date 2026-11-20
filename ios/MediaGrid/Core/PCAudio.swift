@@ -30,10 +30,17 @@ final class PCAudio: @unchecked Sendable {
     func stop() {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        node?.stop()
-        engine?.stop()
-        node = nil; engine = nil; format = nil
-        lock.lock(); queued = 0; playing = false; lock.unlock()
+        lock.lock()
+        let n = node
+        let e = engine
+        node = nil
+        engine = nil
+        format = nil
+        queued = 0
+        playing = false
+        lock.unlock()
+        n?.stop()
+        e?.stop()
     }
 
     private func receive(_ t: URLSessionWebSocketTask) {
@@ -49,31 +56,77 @@ final class PCAudio: @unchecked Sendable {
 
     private func setup(_ json: Data) {
         guard let o = try? JSONSerialization.jsonObject(with: json) as? [String: Any], let rate = o["rate"] as? Double,
-              let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: false) else { return }
-        let e = AVAudioEngine(), n = AVAudioPlayerNode()
-        e.attach(n)
-        e.connect(n, to: e.mainMixerNode, format: f)
-        guard (try? e.start()) != nil else { return }
-        engine = e; node = n; format = f
+              rate > 0, let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: false) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let oldNode = self.node
+            let oldEngine = self.engine
+            self.node = nil
+            self.engine = nil
+            self.lock.unlock()
+
+            oldNode?.stop()
+            oldEngine?.stop()
+
+            let e = AVAudioEngine()
+            let n = AVAudioPlayerNode()
+            e.attach(n)
+            e.connect(n, to: e.mainMixerNode, format: f)
+            do {
+                try e.start()
+                self.lock.lock()
+                self.engine = e
+                self.node = n
+                self.format = f
+                self.lock.unlock()
+            } catch {}
+        }
     }
 
     private func play(_ pcm: Data) {
-        guard let n = node, let f = format else { return }
+        lock.lock()
+        guard let n = node, let f = format, engine?.isRunning == true else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
         let frames = pcm.count / 4
         guard frames > 0, let buf = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(frames)),
               let l = buf.floatChannelData?[0], let r = buf.floatChannelData?[1] else { return }
         buf.frameLength = AVAudioFrameCount(frames)
+
         pcm.withUnsafeBytes { raw in
-            let s = raw.bindMemory(to: Int16.self)
-            for i in 0..<frames { l[i] = Float(Int16(littleEndian: s[i * 2])) / 32768; r[i] = Float(Int16(littleEndian: s[i * 2 + 1])) / 32768 }
+            guard let base = raw.baseAddress else { return }
+            for i in 0..<frames {
+                let leftOffset = i * 4
+                let rightOffset = leftOffset + 2
+                if rightOffset + 1 < raw.count {
+                    let s0 = Int16(littleEndian: base.load(fromByteOffset: leftOffset, as: Int16.self))
+                    let s1 = Int16(littleEndian: base.load(fromByteOffset: rightOffset, as: Int16.self))
+                    l[i] = Float(s0) / 32768.0
+                    r[i] = Float(s1) / 32768.0
+                }
+            }
         }
+
         lock.lock()
+        guard node === n, engine?.isRunning == true else {
+            lock.unlock()
+            return
+        }
         if queued > 40 { lock.unlock(); return }            // far behind: drop to stay in sync
         queued += 1
-        let start = !playing && queued >= 6                  // ~60 ms of audio queued before starting
-        if start { playing = true }
+        let shouldStart = !playing && queued >= 6           // ~60 ms of audio queued before starting
+        if shouldStart { playing = true }
         lock.unlock()
-        n.scheduleBuffer(buf) { [weak self] in self?.lock.lock(); self?.queued -= 1; self?.lock.unlock() }
-        if start { n.play() }
+
+        n.scheduleBuffer(buf) { [weak self] in
+            self?.lock.lock()
+            self?.queued -= 1
+            self?.lock.unlock()
+        }
+        if shouldStart { n.play() }
     }
 }

@@ -15,12 +15,26 @@ final class PhoneStreamer: ObservableObject {
     private var link: CamLink?
     private var sink: FrameSink?
     private var engine: AVAudioEngine?
+    private var hasTap = false
 
     func start(camera: Bool, mic: Bool, back: Bool) async {
         guard !running, camera || mic else { return }
         error = nil
-        if camera, !(await AVCaptureDevice.requestAccess(for: .video)) { error = "Allow camera access for MediaGrid in Settings."; return }
-        if mic, !(await AVAudioApplication.requestRecordPermission()) { error = "Allow microphone access for MediaGrid in Settings."; return }
+        if camera {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if !granted { error = "Allow camera access for MediaGrid in Settings."; return }
+        }
+        if mic {
+            let granted: Bool
+            if #available(iOS 17.0, *) {
+                granted = await AVAudioApplication.requestRecordPermission()
+            } else {
+                granted = await withCheckedContinuation { cont in
+                    AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
+                }
+            }
+            if !granted { error = "Allow microphone access for MediaGrid in Settings."; return }
+        }
         let c = Connection.shared
         if let o: StreamOptions = try? await c.get("/api/stream/options"), !o.acceptPhoneStream {
             error = "Turn on “Accept iPhone camera & microphone” in the PC app, under Settings."
@@ -37,7 +51,10 @@ final class PhoneStreamer: ObservableObject {
 
     func stop() async {
         stopCamera()
-        engine?.inputNode.removeTap(onBus: 0)
+        if hasTap {
+            engine?.inputNode.removeTap(onBus: 0)
+            hasTap = false
+        }
         engine?.stop()
         engine = nil
         link?.close()
@@ -52,7 +69,11 @@ final class PhoneStreamer: ObservableObject {
 
     private func startCamera(back: Bool, link: CamLink) -> Bool {
         capture.beginConfiguration()
-        capture.sessionPreset = .hd1280x720
+        if capture.canSetSessionPreset(.hd1280x720) {
+            capture.sessionPreset = .hd1280x720
+        } else if capture.canSetSessionPreset(.high) {
+            capture.sessionPreset = .high
+        }
         guard let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: back ? .back : .front),
               let input = try? AVCaptureDeviceInput(device: dev), capture.canAddInput(input) else {
             capture.commitConfiguration(); error = "Camera not available."; return false
@@ -79,8 +100,10 @@ final class PhoneStreamer: ObservableObject {
 
     private func stopCamera() {
         if capture.isRunning { capture.stopRunning() }
+        capture.beginConfiguration()
         capture.inputs.forEach { capture.removeInput($0) }
         capture.outputs.forEach { capture.removeOutput($0) }
+        capture.commitConfiguration()
         sink = nil
     }
 
@@ -89,25 +112,42 @@ final class PhoneStreamer: ObservableObject {
     private func startMic(link: CamLink) -> Bool {
         do {
             let s = AVAudioSession.sharedInstance()
-            try s.setCategory(.playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .mixWithOthers])
+            try s.setCategory(.playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .mixWithOthers, .allowBluetooth])
             try s.setActive(true)
-        } catch { self.error = "Microphone not available."; return false }
+        } catch { self.error = "Microphone not available: \(error.localizedDescription)"; return false }
         let eng = AVAudioEngine()
-        let inFmt = eng.inputNode.outputFormat(forBus: 0)
-        guard inFmt.sampleRate > 0, let outFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true),
-              let conv = AVAudioConverter(from: inFmt, to: outFmt) else { error = "Microphone not available."; return false }
+        let inFmt = eng.inputNode.inputFormat(forBus: 0)
+        guard inFmt.sampleRate > 0, inFmt.channelCount > 0,
+              let outFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true),
+              let conv = AVAudioConverter(from: inFmt, to: outFmt) else { error = "Microphone format not supported."; return false }
+
+        if hasTap {
+            eng.inputNode.removeTap(onBus: 0)
+            hasTap = false
+        }
         eng.inputNode.installTap(onBus: 0, bufferSize: 1024, format: inFmt) { buf, _ in
-            let cap = AVAudioFrameCount(Double(buf.frameLength) * 16000 / inFmt.sampleRate) + 16
-            guard let out = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return }
+            let frameRatio = 16000.0 / inFmt.sampleRate
+            let cap = AVAudioFrameCount(Double(buf.frameLength) * frameRatio) + 16
+            guard cap > 0, let out = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: cap) else { return }
             var fed = false
-            conv.convert(to: out, error: nil) { _, status in
+            var convErr: NSError?
+            conv.convert(to: out, error: &convErr) { _, status in
                 if fed { status.pointee = .noDataNow; return nil }
                 fed = true; status.pointee = .haveData; return buf
             }
-            guard out.frameLength > 0, let p = out.int16ChannelData?[0] else { return }
+            guard convErr == nil, out.frameLength > 0, let p = out.int16ChannelData?[0] else { return }
             link.sendAudio(Data(bytes: p, count: Int(out.frameLength) * 2))
         }
-        do { try eng.start() } catch { self.error = "Microphone not available."; return false }
+        hasTap = true
+
+        do {
+            try eng.start()
+        } catch {
+            eng.inputNode.removeTap(onBus: 0)
+            hasTap = false
+            self.error = "Could not start microphone: \(error.localizedDescription)"
+            return false
+        }
         engine = eng
         return true
     }
@@ -143,13 +183,17 @@ final class CamLink: @unchecked Sendable {
 /// Camera frames -> JPEG (on the GPU) -> PC.
 final class FrameSink: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let link: CamLink
-    private let ci = CIContext()
+    private let ci = CIContext(options: [.priorityRequestLow: true])
 
     init(link: CamLink) { self.link = link }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let px = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let jpg = ci.jpegRepresentation(of: CIImage(cvPixelBuffer: px), colorSpace: CGColorSpaceCreateDeviceRGB(),
+        // Avoid GPU/Metal calls when in background to prevent OS termination (0x8badf00d)
+        guard UIApplication.shared.applicationState != .background,
+              let px = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let ciImage = CIImage(cvPixelBuffer: px)
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let jpg = ci.jpegRepresentation(of: ciImage, colorSpace: cs,
                                               options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.6]) else { return }
         link.sendFrame(jpg)
     }

@@ -35,6 +35,9 @@ struct MediaGridApp: App {
                 .environmentObject(shared)
                 .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
                 .tint(TintStore.base)
+                .onOpenURL { url in
+                    handleIncomingURL(url)
+                }
         }
         .onChange(of: phase) { _, p in
             switch p {
@@ -53,6 +56,55 @@ struct MediaGridApp: App {
                 clip.stopWatching()
                 PhotoSync.scheduleBackground()
             default: break
+            }
+        }
+    }
+
+    private func handleIncomingURL(_ url: URL) {
+        if url.isFileURL {
+            Task {
+                if !conn.isSignedIn {
+                    Coordinator.shared.show("Please sign in to MediaGrid first")
+                    return
+                }
+                if conn.state != .online {
+                    await conn.findReachableHost()
+                }
+                let ok = url.startAccessingSecurityScopedResource()
+                defer { if ok { url.stopAccessingSecurityScopedResource() } }
+                let name = url.lastPathComponent
+                Coordinator.shared.show("Copying \(name) to PC…")
+                do {
+                    try await SharedStore.shared.sendFile(url)
+                    Coordinator.shared.show("Copied \(name) to PC")
+                    Haptics.success()
+                    await SharedStore.shared.refresh()
+                } catch {
+                    Coordinator.shared.show("Couldn't send: \(error.localizedDescription)")
+                }
+            }
+        } else if url.scheme == "mediagrid" {
+            guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+            let text = comp.queryItems?.first(where: { $0.name == "text" || $0.name == "url" })?.value
+            if let text, !text.isEmpty {
+                Task {
+                    if !conn.isSignedIn {
+                        Coordinator.shared.show("Please sign in to MediaGrid first")
+                        return
+                    }
+                    if conn.state != .online {
+                        await conn.findReachableHost()
+                    }
+                    Coordinator.shared.show("Copying to PC…")
+                    do {
+                        try await SharedStore.shared.sendText(text)
+                        Coordinator.shared.show("Copied to PC clipboard")
+                        Haptics.success()
+                        await SharedStore.shared.refresh()
+                    } catch {
+                        Coordinator.shared.show("Couldn't send: \(error.localizedDescription)")
+                    }
+                }
             }
         }
     }
@@ -149,8 +201,64 @@ struct LockPCIntent: AppIntent {
     }
 }
 
+/// Directly sends text, link, or files to your PC
+struct SendToPCIntent: AppIntent {
+    static var title: LocalizedStringResource = "Send to PC"
+    static var description = IntentDescription("Directly copies shared text, links, or files to your MediaGrid PC.")
+    static var openAppWhenRun = false
+
+    @Parameter(title: "Text or Link")
+    var text: String?
+
+    @Parameter(title: "File")
+    var file: IntentFile?
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard Connection.shared.isSignedIn else {
+            return .result(dialog: "Please sign in to MediaGrid first.")
+        }
+        if Connection.shared.state != .online {
+            await Connection.shared.findReachableHost()
+        }
+        if let file {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(file.filename)
+            try? file.data.write(to: tmp)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            do {
+                try await SharedStore.shared.sendFile(tmp)
+                return .result(dialog: "Copied \(file.filename) directly to PC.")
+            } catch {
+                return .result(dialog: "Couldn't send file: \(error.localizedDescription)")
+            }
+        }
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                try await SharedStore.shared.sendText(text)
+                return .result(dialog: "Copied to PC clipboard.")
+            } catch {
+                return .result(dialog: "Couldn't send text: \(error.localizedDescription)")
+            }
+        }
+        if UIPasteboard.general.hasStrings, let s = UIPasteboard.general.string, !s.isEmpty {
+            do {
+                try await SharedStore.shared.sendText(s)
+                return .result(dialog: "Copied clipboard to PC.")
+            } catch {
+                return .result(dialog: "Couldn't send clipboard: \(error.localizedDescription)")
+            }
+        }
+        return .result(dialog: "Nothing to send.")
+    }
+}
+
 struct MediaGridShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: SendToPCIntent(), phrases: [
+            "Send to PC in \(.applicationName)",
+            "Copy to PC with \(.applicationName)",
+            "Share to PC in \(.applicationName)"
+        ], shortTitle: "Send to PC", systemImageName: "paperplane.fill")
         AppShortcut(intent: ShuffleMusicIntent(), phrases: ["Shuffle my music in \(.applicationName)", "Play my music in \(.applicationName)"],
                     shortTitle: "Shuffle Music", systemImageName: "shuffle")
         AppShortcut(intent: TogglePlaybackIntent(), phrases: ["Pause \(.applicationName)", "Resume \(.applicationName)", "Play or pause in \(.applicationName)"],

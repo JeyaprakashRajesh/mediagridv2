@@ -41,6 +41,9 @@ final class Connection: ObservableObject {
     private var ws: URLSessionWebSocketTask?
     private var retry = 0
     private var browser: NWBrowser?
+    private var pathMonitor: NWPathMonitor?
+    private var lastPathStatus: NWPath.Status?
+    private var lastInterfaceType: NWInterface.InterfaceType?
     private var statusTimer: Timer?
     lazy var session: URLSession = {
         let c = URLSessionConfiguration.default
@@ -55,6 +58,37 @@ final class Connection: ObservableObject {
 
     init() {
         if isSignedIn { state = .connecting }
+        startNetworkMonitoring()
+        syncToGroup()
+    }
+
+    private func startNetworkMonitoring() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                guard let self else { return }
+                let currentType: NWInterface.InterfaceType = path.usesInterfaceType(.wifi) ? .wifi :
+                                                           path.usesInterfaceType(.cellular) ? .cellular :
+                                                           path.usesInterfaceType(.wiredEthernet) ? .wiredEthernet : .other
+                let statusChanged = (self.lastPathStatus != path.status)
+                let ifaceChanged = (self.lastInterfaceType != currentType)
+                let firstCheck = (self.lastPathStatus == nil)
+                self.lastPathStatus = path.status
+                self.lastInterfaceType = currentType
+
+                if !firstCheck && path.status == .satisfied && (statusChanged || ifaceChanged) && self.isSignedIn {
+                    // Network transitioned (e.g. left Wi-Fi -> joined Cellular/VPN or vice-versa)
+                    self.retry = 0
+                    self.ws?.cancel()
+                    self.ws = nil
+                    await self.findReachableHost()
+                    self.connect()
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+        self.pathMonitor = monitor
     }
 
     // MARK: URLs & requests
@@ -128,10 +162,10 @@ final class Connection: ObservableObject {
         return h
     }
 
-    func ping(_ host: String) async -> ServerInfo? {
+    func ping(_ host: String, timeout: TimeInterval = 3) async -> ServerInfo? {
         guard let u = URL(string: "http://\(host)/api/ping") else { return nil }
         var r = URLRequest(url: u)
-        r.timeoutInterval = 4
+        r.timeoutInterval = timeout
         guard let (d, _) = try? await session.data(for: r) else { return nil }
         let info = try? JSONDecoder().decode(ServerInfo.self, from: d)
         if let m = info?.mac { UserDefaults.standard.set(m, forKey: "mg.pcMac") }   // for Wake-on-LAN
@@ -160,6 +194,7 @@ final class Connection: ObservableObject {
         UserDefaults.standard.set(h, forKey: "mg.host")
         UserDefaults.standard.set(email, forKey: "mg.email")
         UserDefaults.standard.set(info.name, forKey: "mg.pcName")
+        syncToGroup()
         state = .connecting
         connect()
     }
@@ -170,11 +205,24 @@ final class Connection: ObservableObject {
         ws?.cancel(with: .goingAway, reason: nil)
         ws = nil
         state = .signedOut
+        if let g = UserDefaults(suiteName: "group.com.jeyaprakash.mediagrid") {
+            g.removeObject(forKey: "mg.token")
+        }
     }
 
     func remember(_ h: String) {
         if !knownHosts.contains(h) { knownHosts.insert(h, at: 0) }
         UserDefaults.standard.set(knownHosts, forKey: "mg.hosts")
+        syncToGroup()
+    }
+
+    func syncToGroup() {
+        if let g = UserDefaults(suiteName: "group.com.jeyaprakash.mediagrid") {
+            g.set(host, forKey: "mg.host")
+            g.set(token, forKey: "mg.token")
+            g.set(pcName, forKey: "mg.pcName")
+            g.set(knownHosts, forKey: "mg.hosts")
+        }
     }
 
     // MARK: WebSocket
@@ -229,14 +277,55 @@ final class Connection: ObservableObject {
 
     /// Switch between LAN / Tailscale addresses automatically.
     func findReachableHost() async {
-        if await ping(host) != nil { return }
-        let candidates = knownHosts + discovered.filter { $0.name == pcName }.map { "\($0.host):\($0.port)" }
-        for h in candidates where h != host {
-            if await ping(h) != nil {
-                host = h
-                UserDefaults.standard.set(h, forKey: "mg.host")
-                return
+        var candidates: [String] = []
+        if !host.isEmpty { candidates.append(host) }
+        for k in knownHosts where !candidates.contains(k) { candidates.append(k) }
+        for d in discovered where (pcName.isEmpty || d.name == pcName) {
+            let ep = "\(d.host):\(d.port)"
+            if !candidates.contains(ep) { candidates.append(ep) }
+        }
+        guard !candidates.isEmpty else { return }
+
+        // Fast path: if the currently selected host is responsive within 1.2s, stay on it
+        if !host.isEmpty, await ping(host, timeout: 1.2) != nil {
+            return
+        }
+
+        // Concurrently ping all candidate addresses
+        let reachable = await withTaskGroup(of: (String, ServerInfo, Bool)?.self) { group in
+            for candidate in candidates {
+                group.addTask { [weak self] in
+                    guard let self else { return nil }
+                    if let info = await self.ping(candidate, timeout: 2.0) {
+                        let isLAN = !candidate.hasPrefix("100.")
+                        return (candidate, info, isLAN)
+                    }
+                    return nil
+                }
             }
+            var responders: [(host: String, info: ServerInfo, isLAN: Bool)] = []
+            for await res in group {
+                if let res {
+                    responders.append(res)
+                }
+            }
+            return responders
+        }
+
+        guard !reachable.isEmpty else { return }
+
+        // Prefer LAN over Tailscale if both are reachable (lowest latency on local Wi-Fi)
+        let selected: String
+        if let lanHost = reachable.first(where: { $0.isLAN })?.host {
+            selected = lanHost
+        } else {
+            selected = reachable[0].host
+        }
+
+        if selected != self.host {
+            self.host = selected
+            UserDefaults.standard.set(selected, forKey: "mg.host")
+            remember(selected)
         }
     }
 
@@ -262,7 +351,10 @@ final class Connection: ObservableObject {
 
     func resume() {
         guard isSignedIn else { return }
-        if state != .online { connect() }
+        Task {
+            await findReachableHost()
+            if state != .online { connect() }
+        }
     }
 
     // MARK: Bonjour discovery

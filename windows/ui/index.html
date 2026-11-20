@@ -42,6 +42,7 @@
           </div>
           <div class="hero-actions">
             <div class="search glass"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="music-search" placeholder="Search songs, artists, albums" /></div>
+            <button class="btn glass" id="music-smartmix" title="Create automated Spotify-style playlist"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" class="fill"/></svg>Smart Mix</button>
             <button class="btn glass" id="music-shuffle"><svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>Shuffle all</button>
             <button class="btn ghost" id="music-rescan"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Rescan</button>
           </div>
@@ -232,6 +233,69 @@
     <div class="vol"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4z" class="fill"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg><input type="range" id="p-vol" min="0" max="100" value="80" /></div>
     <audio id="audio" preload="auto"></audio>
   </footer>
+
+  <!-- Smart Mix Modal -->
+  <div id="smartmix-modal" class="smartmix-modal" hidden>
+    <div class="smartmix-dialog glass">
+      <div class="row between">
+        <div>
+          <h3>Automated Smart Playlist</h3>
+          <p class="muted small">Spotify-style mixes based on acoustic analysis, tempo, and time of day</p>
+        </div>
+        <button class="ic" id="smartmix-close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </div>
+
+      <div class="smartmix-presets">
+        <button class="sm-card active" data-preset="daylist">
+          <span class="sm-emoji">🌅</span>
+          <b>Daylist</b>
+          <small id="sm-daylist-sub">Adapts to time of day</small>
+        </button>
+        <button class="sm-card" data-preset="workout">
+          <span class="sm-emoji">⚡</span>
+          <b>Workout Arc</b>
+          <small>&ge; 120 BPM &amp; energy arc</small>
+        </button>
+        <button class="sm-card" data-preset="chill">
+          <span class="sm-emoji">🌙</span>
+          <b>Chill &amp; Focus</b>
+          <small>&le; 105 BPM &amp; relaxed</small>
+        </button>
+        <button class="sm-card" data-preset="radio">
+          <span class="sm-emoji">📻</span>
+          <b>Artist Radio</b>
+          <small>Sound-alike cluster</small>
+        </button>
+        <button class="sm-card" data-preset="throwback">
+          <span class="sm-emoji">⏳</span>
+          <b>Decade Mix</b>
+          <small>Grouped by era</small>
+        </button>
+      </div>
+
+      <div id="sm-extra" class="sm-extra" hidden>
+        <label id="sm-extra-label" class="muted small">Seed Artist:</label>
+        <select id="sm-artist-select" class="sm-select"></select>
+      </div>
+
+      <div class="sm-preview-box">
+        <div class="row between" style="margin-top:0;margin-bottom:8px">
+          <b id="sm-preview-title">Preview: 0 tracks</b>
+          <span class="muted small" id="sm-preview-flow">Flow: BPM sorted · Artist spread</span>
+        </div>
+        <div class="sm-tracklist" id="sm-tracklist"></div>
+      </div>
+
+      <div class="row between" style="margin-top:8px">
+        <input id="sm-playlist-name" placeholder="Playlist Name" class="sm-name-input" />
+        <div class="row" style="margin-top:0">
+          <button class="btn ghost" id="sm-refresh-btn" title="Regenerate with different picks">Regenerate</button>
+          <button class="btn glass" id="sm-play-btn">Play Now</button>
+          <button class="btn primary" id="sm-save-btn">Save to Library</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="lightbox" id="lightbox"><button class="lb-close" id="lb-close">✕</button><button class="lb-nav prev" id="lb-prev" title="Previous (←)">‹</button><button class="lb-nav next" id="lb-next" title="Next (→)">›</button><div id="lb-body"></div></div>
   <div class="toast" id="toast"></div>

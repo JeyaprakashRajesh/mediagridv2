@@ -160,6 +160,182 @@ function loadTracksView() {
 $("#music-search").oninput = (e) => { musicFilter.q = e.target.value; loadTracksView(); };
 $("#music-rescan").onclick = async () => { await invoke("rescan"); toast("Rescanning your library…"); };
 $("#music-shuffle").onclick = () => { player.shuffle = true; $("#p-shuffle").classList.add("on"); player.playList(tracks, -1); };
+$("#music-smartmix").onclick = () => openSmartMixModal();
+
+/* ---------------- smart playlist generation (Spotify-style) ---------------- */
+let smartMixPreset = "daylist";
+let currentSmartPicks = [];
+
+function openSmartMixModal() {
+  $("#smartmix-modal").hidden = false;
+  const artists = [...new Set(tracks.map((t) => t.artist).filter(Boolean))].sort();
+  const sel = $("#sm-artist-select");
+  sel.innerHTML = artists.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
+  generateSmartMix();
+}
+
+function closeSmartMixModal() {
+  $("#smartmix-modal").hidden = true;
+}
+
+// Sequence picks using Spotify's flow principle:
+// 1. Sort by tempo/energy progression
+// 2. Artist spreading: Ensure no two consecutive tracks share the same artist
+function sequenceSpotifyFlow(picks, mode = "tempo") {
+  if (picks.length <= 2) return picks;
+  let pool = [...picks];
+  if (mode === "arc") {
+    // Workout arc: warm up -> high energy peak in middle -> cooldown
+    pool.sort((a, b) => (a.bpm || 110) - (b.bpm || 110));
+    const warm = [], peak = [], cool = [];
+    pool.forEach((t, i) => {
+      if (i % 3 === 0) warm.push(t);
+      else if (i % 3 === 1) peak.push(t);
+      else cool.push(t);
+    });
+    pool = [...warm, ...peak.reverse(), ...cool];
+  } else {
+    // Smooth tempo ladder
+    pool.sort((a, b) => (a.bpm || 110) - (b.bpm || 110));
+  }
+
+  // Artist spreading (damping)
+  const result = [];
+  let lastArtist = "";
+  while (pool.length) {
+    let idx = pool.findIndex((t) => t.artist !== lastArtist);
+    if (idx === -1) idx = 0;
+    const [picked] = pool.splice(idx, 1);
+    result.push(picked);
+    lastArtist = picked.artist;
+  }
+  return result;
+}
+
+function generateSmartMix() {
+  if (!tracks.length) {
+    $("#sm-preview-title").textContent = "Your library is empty";
+    $("#sm-tracklist").innerHTML = '<div class="empty" style="padding:20px">No tracks available to analyze.</div>';
+    return;
+  }
+
+  const h = new Date().getHours();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayName = dayNames[new Date().getDay()];
+  let picks = [];
+  let suggestedName = "";
+  let flowMode = "tempo";
+
+  if (smartMixPreset === "daylist") {
+    let slot, bpmMin, bpmMax, eMin, eMax;
+    if (h >= 5 && h < 12) {
+      slot = `${dayName} Morning Acoustic Rise`;
+      bpmMin = 75; bpmMax = 115; eMin = 0; eMax = 0.55;
+    } else if (h >= 12 && h < 17) {
+      slot = `${dayName} Afternoon Focus Groove`;
+      bpmMin = 100; bpmMax = 130; eMin = 0.45; eMax = 0.85;
+    } else if (h >= 17 && h < 22) {
+      slot = `${dayName} Evening Golden Vibe`;
+      bpmMin = 90; bpmMax = 125; eMin = 0.35; eMax = 0.75;
+    } else {
+      slot = `${dayName} Late Night Chill Ambient`;
+      bpmMin = 60; bpmMax = 105; eMin = 0; eMax = 0.45;
+    }
+    suggestedName = `Daylist: ${slot}`;
+    let match = tracks.filter((t) => (!t.bpm || (t.bpm >= bpmMin && t.bpm <= bpmMax)) && (!t.energy || (t.energy >= eMin && t.energy <= eMax)));
+    if (match.length < 10) match = tracks;
+    picks = match.sort(() => Math.random() - 0.5).slice(0, 40);
+  } else if (smartMixPreset === "workout") {
+    suggestedName = "⚡ High-Energy Workout Arc";
+    flowMode = "arc";
+    let match = tracks.filter((t) => (t.bpm && t.bpm >= 120) || (t.energy && t.energy >= 0.5));
+    if (match.length < 10) match = tracks.filter((t) => !t.bpm || t.bpm >= 110);
+    picks = match.sort(() => Math.random() - 0.5).slice(0, 40);
+  } else if (smartMixPreset === "chill") {
+    suggestedName = "🌙 Chill & Focus Flow";
+    let match = tracks.filter((t) => (t.bpm && t.bpm <= 105) || (t.energy && t.energy <= 0.45));
+    if (match.length < 10) match = tracks.filter((t) => !t.bpm || t.bpm <= 115);
+    picks = match.sort(() => Math.random() - 0.5).slice(0, 40);
+  } else if (smartMixPreset === "radio") {
+    const seedArtist = $("#sm-artist-select").value || tracks[0]?.artist || "";
+    suggestedName = `📻 ${seedArtist} & Sound-Alikes`;
+    const artistTracks = tracks.filter((t) => t.artist === seedArtist);
+    const avgBpm = artistTracks.reduce((s, t) => s + (t.bpm || 110), 0) / (artistTracks.length || 1);
+    const avgEnergy = artistTracks.reduce((s, t) => s + (t.energy || 0.5), 0) / (artistTracks.length || 1);
+    const avgPunch = artistTracks.reduce((s, t) => s + (t.punch || 0.3), 0) / (artistTracks.length || 1);
+
+    const scored = tracks.map((t) => {
+      const dbpm = ((t.bpm || 110) - avgBpm) / 30;
+      const denergy = (t.energy || 0.5) - avgEnergy;
+      const dpunch = (t.punch || 0.3) - avgPunch;
+      const dist = Math.sqrt(dbpm * dbpm + denergy * denergy + dpunch * dpunch);
+      return { t, dist: t.artist === seedArtist ? dist * 0.7 : dist };
+    }).sort((a, b) => a.dist - b.dist);
+
+    picks = scored.slice(0, 40).map((x) => x.t);
+  } else if (smartMixPreset === "throwback") {
+    const decades = [1980, 1990, 2000, 2010];
+    const dec = decades[Math.floor(Math.random() * decades.length)];
+    suggestedName = `⏳ ${dec}s Retro Mix`;
+    let match = tracks.filter((t) => t.year >= dec && t.year < dec + 10);
+    if (!match.length) match = tracks;
+    picks = match.sort(() => Math.random() - 0.5).slice(0, 40);
+  }
+
+  currentSmartPicks = sequenceSpotifyFlow(picks, flowMode);
+  $("#sm-playlist-name").value = suggestedName;
+  $("#sm-preview-title").textContent = `Preview: ${currentSmartPicks.length} tracks`;
+  $("#sm-preview-flow").textContent = flowMode === "arc" ? "Flow: Energy Arc (warm-up → peak → cool)" : "Flow: Smooth BPM · Artist spread";
+
+  $("#sm-tracklist").innerHTML = currentSmartPicks.map((t, i) => `
+    <div class="sm-trow">
+      <span class="muted">${i + 1}</span>
+      <b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</b>
+      <span class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.artist)}</span>
+      <span class="bpm">${t.bpm ? Math.round(t.bpm) + " BPM" : ""}</span>
+      <span class="dur">${fmtTime(t.duration)}</span>
+    </div>
+  `).join("");
+}
+
+$("#smartmix-close").onclick = closeSmartMixModal;
+$("#sm-refresh-btn").onclick = generateSmartMix;
+$$(".sm-card").forEach((card) => {
+  card.onclick = () => {
+    $$(".sm-card").forEach((c) => c.classList.toggle("active", c === card));
+    smartMixPreset = card.dataset.preset;
+    $("#sm-extra").hidden = smartMixPreset !== "radio";
+    generateSmartMix();
+  };
+});
+$("#sm-artist-select").onchange = generateSmartMix;
+
+$("#sm-play-btn").onclick = () => {
+  if (!currentSmartPicks.length) return;
+  closeSmartMixModal();
+  player.playList(currentSmartPicks, 0);
+  toast(`Playing ${$("#sm-playlist-name").value}`);
+};
+
+$("#sm-save-btn").onclick = async () => {
+  if (!currentSmartPicks.length) return;
+  const name = $("#sm-playlist-name").value.trim() || "Automated Mix";
+  const id = crypto.randomUUID ? crypto.randomUUID() : "pl_" + Date.now();
+  const newPl = { id, name, trackIDs: currentSmartPicks.map((t) => t.id), created: Date.now() };
+
+  const idx = playlists.findIndex((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (idx >= 0) playlists[idx] = newPl;
+  else playlists.unshift(newPl);
+
+  try {
+    await api("/api/playlists", { method: "POST", json: playlists });
+    toast(`Saved "${name}" to library!`);
+    closeSmartMixModal();
+    loadTracks();
+  } catch (e) {
+    toast("Failed to save playlist: " + e.message);
+  }
+};
 
 /* ---------------- player (smart shuffle: no repeats until the whole queue is heard) ---------------- */
 const audio = $("#audio");
