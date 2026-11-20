@@ -117,7 +117,7 @@ final class H264Display: @unchecked Sendable {
         let n = avcc.count
         guard n > 0 else { return nil }
 
-        let okAlloc = avcc.withUnsafeBytes { raw in
+        let okAlloc = avcc.withUnsafeBytes { raw -> OSStatus in
             guard raw.baseAddress != nil else { return -1 }
             return CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: n, blockAllocator: kCFAllocatorDefault,
                                                      customBlockSource: nil, offsetToData: 0, dataLength: n, flags: 0, blockBufferOut: &block)
