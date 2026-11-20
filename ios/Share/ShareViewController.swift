@@ -77,7 +77,7 @@ class ShareViewController: UIViewController {
             blurCard.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             blurCard.widthAnchor.constraint(equalToConstant: 260),
 
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, spacing: 24),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -18),
             stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 18),
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -18),
